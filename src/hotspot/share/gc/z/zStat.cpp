@@ -830,7 +830,8 @@ void ZStatInc(const ZStatUnsampledCounter& counter, uint64_t increment) {
 // Stat allocation rate
 //
 const ZStatUnsampledCounter ZStatAllocRate::_counter("Allocation Rate");
-TruncatedSeq                ZStatAllocRate::_rate(ZStatAllocRate::sample_window_sec * ZStatAllocRate::sample_hz);
+TruncatedSeq                ZStatAllocRate::_rate(ZStatAllocRate::sample_hz);
+// TruncatedSeq                ZStatAllocRate::_rate(ZStatAllocRate::sample_window_sec * ZStatAllocRate::sample_hz);
 TruncatedSeq                ZStatAllocRate::_rate_avg(ZStatAllocRate::sample_window_sec * ZStatAllocRate::sample_hz);
 
 const ZStatUnsampledCounter& ZStatAllocRate::counter() {
@@ -839,16 +840,24 @@ const ZStatUnsampledCounter& ZStatAllocRate::counter() {
 
 uint64_t ZStatAllocRate::sample_and_reset() {
   const ZStatCounterData bytes_per_sample = _counter.collect_and_reset();
-  const uint64_t bytes_per_second = bytes_per_sample._counter * sample_hz;
 
-  _rate.add(bytes_per_second);
-  _rate_avg.add(_rate.avg());
+  // // pretending the same rate will persist for the upcoming (sample_hz-1) samples
+  // const uint64_t bytes_per_second = bytes_per_sample._counter * sample_hz;
+
+  // _rate.add(bytes_per_second);
+  // _rate_avg.add(_rate.avg());
+
+  _rate.add(bytes_per_sample._counter);
+  // looking back for 1s
+  const uint64_t bytes_per_second = (uint64_t)_rate.sum();
+  _rate_avg.add(bytes_per_second);
 
   return bytes_per_second;
 }
 
 double ZStatAllocRate::avg() {
-  return _rate.avg();
+  // return _rate.avg();
+  return _rate_avg.avg();
 }
 
 double ZStatAllocRate::avg_sd() {
@@ -1059,6 +1068,7 @@ uint64_t  ZStatCycle::_nwarmup_cycles = 0;
 Ticks     ZStatCycle::_start_of_last;
 Ticks     ZStatCycle::_end_of_last;
 NumberSeq ZStatCycle::_normalized_duration(0.7 /* alpha */);
+double    ZStatCycle::prev_used_percent;
 
 void ZStatCycle::at_start() {
   _start_of_last = Ticks::now();
@@ -1069,6 +1079,23 @@ void ZStatCycle::at_end(GCCause::Cause cause, double boost_factor) {
 
   if (cause == GCCause::_z_warmup) {
     _nwarmup_cycles++;
+  }
+
+  // for async gc, record previous heap usage percentage
+  switch (cause) {
+    case GCCause::_z_timer:
+    case GCCause::_z_warmup:
+    case GCCause::_z_allocation_rate:
+    case GCCause::_z_allocation_stall:
+    case GCCause::_z_proactive:
+    case GCCause::_z_high_usage:
+    case GCCause::_metadata_GC_threshold:
+      prev_used_percent =
+        (double) ZStatHeap::used_at_mark_start() / ZStatHeap::max_capacity();
+      break;
+
+    default:
+       break;
   }
 
   // Calculate normalized cycle duration. The measured duration is

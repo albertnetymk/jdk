@@ -377,6 +377,8 @@ private:
   static NumberSeq _normalized_duration;
 
 public:
+  static double prev_used_percent;
+
   static void at_start();
   static void at_end(GCCause::Cause cause, double boost_factor);
 
@@ -387,6 +389,11 @@ public:
   static const AbsSeq& normalized_duration();
 
   static double time_since_last();
+
+  static double max_duration_of_gc(double avg_factor, double sd_factor)   {
+    return _normalized_duration.davg() * avg_factor + (_normalized_duration.dsd() * sd_factor);
+  }
+
 };
 
 //

@@ -111,6 +111,7 @@ public:
   size_t soft_max_capacity() const;
   size_t capacity() const;
   size_t used() const;
+  size_t used_high() const;
   size_t unused() const;
 
   ZPageAllocatorStats stats() const;

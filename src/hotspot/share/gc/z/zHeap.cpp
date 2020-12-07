@@ -100,6 +100,10 @@ size_t ZHeap::used() const {
   return _page_allocator.used();
 }
 
+size_t ZHeap::used_high() const {
+  return _page_allocator.used_high();
+}
+
 size_t ZHeap::unused() const {
   return _page_allocator.unused();
 }
@@ -148,16 +152,195 @@ bool ZHeap::is_in(uintptr_t addr) const {
   return false;
 }
 
-uint ZHeap::nconcurrent_worker_threads() const {
+double ZHeap::boost_factor() const {
+  return _workers.boost_factor();
+}
+
+uint ZHeap::nconcurrent() const {
   return _workers.nconcurrent();
 }
 
-uint ZHeap::nconcurrent_no_boost_worker_threads() const {
+void ZHeap::set_nconcurrent(uint n) {
+  _workers.set_nconcurrent(n);
+}
+
+uint ZHeap::nconcurrent_no_boost() const {
   return _workers.nconcurrent_no_boost();
 }
 
 void ZHeap::set_boost_worker_threads(bool boost) {
   _workers.set_boost(boost);
+}
+
+bool ZHeap::should_start_gc_now(bool print_log) {
+  // on alloc stall, the alloc rate metric becomes unreliable. using a few
+  // consecutive full-speed gc cycles to regain more accurate alloc rate
+  constexpr static uint32_t alloc_stall_effect = 3;
+  static uint32_t last_alloc_stall_seq_num = (uint32_t)-alloc_stall_effect;
+
+  bool ret;
+  uint suggested_n;
+  double n_ideal = 0.0;
+  double n_dec_ideal = 0.0;
+
+  const bool is_stalled = used_high() >= soft_max_capacity();
+
+  // 0.1%
+  constexpr double sd_factor = 3.290527;
+  const double alloc_rate = ZStatAllocRate::avg()    * ZAllocationSpikeTolerance
+                          + ZStatAllocRate::avg_sd() * sd_factor
+                          + 1.0; // avoid division by zero
+
+  const size_t mutator_max = soft_max_capacity() - ZHeuristics::relocation_headroom();
+
+  // `margin` measures the closest distance to oom since previous stw1 in
+  // seconds, negative value means potential alloc stall.
+  const double watermark = (double)used_high() / mutator_max;
+  const double margin = mutator_max * (1-watermark) / alloc_rate;
+
+  const double alloc_rate_sd_percent = ZStatAllocRate::avg_sd() / (ZStatAllocRate::avg() + 1.0);
+
+  constexpr double sample_interval = 1.0 / ZStatAllocRate::sample_hz;
+
+  const size_t used_bytes = used();
+  const double used_percent = (double) used_bytes / ZStatHeap::max_capacity();
+  const size_t free_bytes = mutator_max > used_bytes ? mutator_max - used_bytes
+                                                     : 0;
+
+  // Calculate how much time left before hitting oom giving the current free
+  // bytes and the predicted alloc rate. Bound by 1ms to avoid division by zero.
+  const double time_till_oom = MAX2(free_bytes/alloc_rate - sample_interval, 0.001);
+
+  auto normalize_factor = UseDynamicNumberOfGCThreads ? ConcGCThreads : boost_factor();
+  const AbsSeq& duration = ZStatCycle::normalized_duration();
+  const double gc_duration_avg = duration.davg();
+  const double gc_duration_sd = duration.dsd();
+  const double norm_gc_duration = (gc_duration_avg + gc_duration_sd * sd_factor) / normalize_factor;
+
+  // avoiding boost
+  const uint previous_n_bounded = MIN2(nconcurrent(), ConcGCThreads);
+
+  // No adaptation once a gc cycle is initiated, so each cycle needs to be
+  // short enough to handle emergencies.
+  // TODO: not sure about absolute number or sth depending on norm_gc_duration
+  constexpr double max_gc_duration = 10;
+
+  uint min_n = clamp((uint) ceil(norm_gc_duration * ConcGCThreads / max_gc_duration),
+                     1u, ConcGCThreads);
+
+  // It seems in steady state, the sd is < 5%, using the following magic threshold.
+  constexpr double alloc_rate_sd_threshold = 0.15;
+
+  // An accurate prediction requires steady alloc rate and gc duration (heap usage as the predicator)
+  const bool is_env_steady = true
+    && alloc_rate_sd_percent                         <= alloc_rate_sd_threshold
+    && used_percent - ZStatCycle::prev_used_percent  <=  0.10
+    ;
+
+  constexpr bool at_least_half_ConcGCThreads = false;
+  if (!is_env_steady || at_least_half_ConcGCThreads) {
+    min_n = MAX2(min_n, (uint) ceil(ConcGCThreads / 2.0));
+  }
+
+  do {
+
+  // (almost) alloc/relocation stall; full-speed gc right away
+  if (false
+      || is_stalled
+      || (last_alloc_stall_seq_num + alloc_stall_effect >= ZGlobalSeqNum) // alloc stall after-effect
+      ) {
+    suggested_n = ConcGCThreads;
+    ret = true;
+    break;
+  }
+
+  // startup; always ConcGCThreads
+  if (!ZStatCycle::is_warm()) {
+    suggested_n = ConcGCThreads;
+    ret = norm_gc_duration + sample_interval >= time_till_oom;
+    break;
+  }
+
+  uint n;
+  if (alloc_rate_sd_percent >= alloc_rate_sd_threshold) {
+    // Since time_till_oom is calculated based on the currently observed
+    // alloc rate, when the alloc rate is volatile (reflected as large sd),
+    // such calculation could be unreliable. In order to incorporate such
+    // volatility, we artificially deflate the oom time to react promptly for
+    // the potential imminent high alloc rate.
+    const double deflated_time_till_oom = time_till_oom / (1.0 + alloc_rate_sd_percent);
+    n_ideal = norm_gc_duration * ConcGCThreads / deflated_time_till_oom;
+    // not reducing n when alloc rate is too volatile
+    n = clamp((uint) ceil(n_ideal), previous_n_bounded, ConcGCThreads);
+  } else {
+    n_ideal = norm_gc_duration * ConcGCThreads / time_till_oom;
+    n = clamp((uint) ceil(n_ideal), min_n, ConcGCThreads);
+    // more stringent calculation on trying to reduce n
+    if (n < previous_n_bounded) {
+      // after reducing n, gc duration will increase, affecting the
+      // calculation for next gc cycle. Therefore, we use the next
+      // time_till_oom (deducting the gc duration delta) to derive n
+      const double gc_duration_delta = norm_gc_duration * ConcGCThreads * (1.0/n - 1.0/previous_n_bounded);
+      const double next_time_till_oom = ZStatCycle::time_since_last()
+                                      - sample_interval
+                                      - gc_duration_delta
+                                      + time_till_oom;
+      n_dec_ideal = norm_gc_duration * ConcGCThreads / MAX2(next_time_till_oom, 0.001); // in case it's negative
+      // some friction on reducing n
+      n = clamp((uint) ceil(n_dec_ideal + 0.50), min_n, previous_n_bounded);
+    }
+  }
+
+  suggested_n = n;
+  // some head start for not running at full-speed and some negative feedback for too small margin
+  const double  extra = sample_interval
+                      + (ConcGCThreads - n) * sample_interval
+                      + MAX2(2*sample_interval - margin, 0.0) * 10
+                      ;
+  ret = n > previous_n_bounded || (norm_gc_duration * ConcGCThreads / n + extra >= time_till_oom);
+
+  } while (false);
+
+  if (print_log) {
+    log_info(gc)(
+        "high: %.1f%%; "
+        "min_n: %d; "
+        "gc: %.3f (%.1f%%), "
+        "oom: %.3f, "
+        "margin: %.3f, "
+        "rate: %.3f + %.3f M/s (%.1f%%), "
+        "n: %d -> %d (%.3f, %.3f), "
+        "",
+        watermark * 100,
+        min_n,
+        norm_gc_duration * ConcGCThreads, gc_duration_sd / gc_duration_avg * 100,
+        time_till_oom,
+        margin,
+        (ZStatAllocRate::avg())/(1024*1024), (ZStatAllocRate::avg_sd() * 1)/(1024*1024),
+        (alloc_rate_sd_percent * 100),
+        nconcurrent(),
+        suggested_n,
+        n_ideal,
+        n_dec_ideal
+        );
+    if (is_stalled) {
+      last_alloc_stall_seq_num = ZGlobalSeqNum;
+    }
+    if (UseDynamicNumberOfGCThreads) {
+      assert(min_n <= suggested_n && suggested_n <= ConcGCThreads, "");
+      set_nconcurrent(suggested_n);
+    }
+  }
+
+  return ret;
+}
+
+void ZHeap::dynamic_adjust_nconcurrent() {
+  if (!ZStatCycle::is_normalized_duration_trustable()) {
+    return;
+  }
+
+  should_start_gc_now(true);
 }
 
 void ZHeap::threads_do(ThreadClosure* tc) const {

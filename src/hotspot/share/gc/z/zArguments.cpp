@@ -66,6 +66,12 @@ void ZArguments::initialize() {
   // Select number of concurrent threads
   if (FLAG_IS_DEFAULT(ConcGCThreads)) {
     FLAG_SET_DEFAULT(ConcGCThreads, ZHeuristics::nconcurrent_workers());
+  } else if (FLAG_IS_DEFAULT(UseDynamicNumberOfGCThreads)) {
+    FLAG_SET_DEFAULT(UseDynamicNumberOfGCThreads, false);
+  }
+
+  if (UseDynamicNumberOfGCThreads && FLAG_IS_DEFAULT(ZAllocationSpikeTolerance)) {
+    FLAG_SET_DEFAULT(ZAllocationSpikeTolerance, 1);
   }
 
   if (ConcGCThreads == 0) {

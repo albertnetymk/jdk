@@ -384,8 +384,7 @@ public:
 
   ~ZDriverGCScope() {
     // Calculate boost factor
-    const double boost_factor = (double)ZHeap::heap()->nconcurrent_worker_threads() /
-                                (double)ZHeap::heap()->nconcurrent_no_boost_worker_threads();
+    const double boost_factor = ZHeap::heap()->boost_factor();
 
     // Update statistics
     ZStatCycle::at_end(_gc_cause, boost_factor);
@@ -412,6 +411,8 @@ public:
   } while (false)
 
 void ZDriver::gc(GCCause::Cause cause) {
+  ZHeap::heap()->dynamic_adjust_nconcurrent();
+
   ZDriverGCScope scope(cause);
 
   // Phase 1: Pause Mark Start

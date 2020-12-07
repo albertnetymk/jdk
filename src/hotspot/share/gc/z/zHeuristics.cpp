@@ -99,5 +99,5 @@ uint ZHeuristics::nconcurrent_workers() {
   // throughput, while using too few threads will prolong the GC-cycle and
   // we then risk being out-run by the application. Using 12.5% of the active
   // processors appears to be a fairly good balance.
-  return nworkers(12.5);
+  return nworkers(25);
 }

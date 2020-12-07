@@ -259,6 +259,10 @@ size_t ZPageAllocator::used() const {
   return Atomic::load(&_used);
 }
 
+size_t ZPageAllocator::used_high() const {
+  return _used_high;
+}
+
 size_t ZPageAllocator::unused() const {
   const ssize_t capacity = (ssize_t)Atomic::load(&_capacity);
   const ssize_t used = (ssize_t)Atomic::load(&_used);
@@ -648,7 +652,7 @@ retry:
 
   // Update allocation statistics. Exclude worker relocations to avoid
   // artificial inflation of the allocation rate during relocation.
-  if (!flags.worker_relocation()) {
+  if (!flags.worker_relocation() && is_init_completed()) {
     // Note that there are two allocation rate counters, which have
     // different purposes and are sampled at different frequencies.
     const size_t bytes = page->size();

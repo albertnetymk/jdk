@@ -92,6 +92,11 @@ bool ZDirector::rule_allocation_rate() const {
     return false;
   }
 
+  if (UseDynamicNumberOfGCThreads) {
+    auto heap = ZHeap::heap();
+    return heap->should_start_gc_now();
+  }
+
   // Perform GC if the estimated max allocation rate indicates that we
   // will run out of memory. The estimated max allocation rate is based
   // on the moving average of the sampled allocation rate plus a safety

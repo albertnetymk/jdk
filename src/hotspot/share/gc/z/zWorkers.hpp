@@ -31,6 +31,7 @@ class ZTask;
 
 class ZWorkers {
 private:
+  uint _nconcurrent;
   bool     _boost;
   WorkGang _workers;
 
@@ -41,7 +42,9 @@ public:
 
   uint nparallel() const;
   uint nparallel_no_boost() const;
+  double boost_factor() const;
   uint nconcurrent() const;
+  void set_nconcurrent(uint n);
   uint nconcurrent_no_boost() const;
   uint nworkers() const;
 

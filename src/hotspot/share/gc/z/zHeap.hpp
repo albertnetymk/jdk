@@ -38,6 +38,7 @@
 #include "gc/z/zServiceability.hpp"
 #include "gc/z/zUnload.hpp"
 #include "gc/z/zWorkers.hpp"
+#include "zStat.hpp"
 
 class ThreadClosure;
 class ZPage;
@@ -82,6 +83,7 @@ public:
   size_t soft_max_capacity() const;
   size_t capacity() const;
   size_t used() const;
+  size_t used_high() const;
   size_t unused() const;
 
   size_t tlab_capacity() const;
@@ -93,9 +95,16 @@ public:
   uint32_t hash_oop(uintptr_t addr) const;
 
   // Threads
-  uint nconcurrent_worker_threads() const;
-  uint nconcurrent_no_boost_worker_threads() const;
+  double boost_factor() const;
+  uint nconcurrent() const;
+  void set_nconcurrent(uint n);
+  uint nconcurrent_no_boost() const;
   void set_boost_worker_threads(bool boost);
+
+  bool should_start_gc_now(bool print_log = false);
+
+  void dynamic_adjust_nconcurrent();
+
   void threads_do(ThreadClosure* tc) const;
 
   // Reference processing

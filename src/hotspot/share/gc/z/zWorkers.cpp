@@ -60,6 +60,7 @@ public:
 };
 
 ZWorkers::ZWorkers() :
+    _nconcurrent(ConcGCThreads),
     _boost(false),
     _workers("ZWorker",
              nworkers(),
@@ -83,8 +84,13 @@ ZWorkers::ZWorkers() :
 void ZWorkers::set_boost(bool boost) {
   if (boost) {
     log_debug(gc)("Boosting workers");
+    log_info(gc)("Boost mode; using %u conc gc threads", nworkers());
+    set_nconcurrent(nworkers());
+  } else {
+    if (!UseDynamicNumberOfGCThreads && nconcurrent() != ConcGCThreads) {
+      set_nconcurrent(ConcGCThreads);
+    }
   }
-
   _boost = boost;
 }
 

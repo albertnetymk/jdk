@@ -36,8 +36,20 @@ inline uint ZWorkers::nparallel_no_boost() const {
   return ParallelGCThreads;
 }
 
+inline double ZWorkers::boost_factor() const {
+  if (UseDynamicNumberOfGCThreads) {
+    // inflate gc duration as if we only use single gc thread
+    return nconcurrent();
+  }
+  return _boost ? (double)nworkers()/(double)nconcurrent_no_boost() : 1.0;
+}
+
 inline uint ZWorkers::nconcurrent() const {
-  return _boost ? nworkers() : nconcurrent_no_boost();
+  return _nconcurrent;
+}
+
+inline void ZWorkers::set_nconcurrent(uint n) {
+  _nconcurrent = n;
 }
 
 inline uint ZWorkers::nconcurrent_no_boost() const {

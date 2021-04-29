@@ -1697,23 +1697,14 @@ void PSParallelCompact::invoke(bool maximum_heap_compaction) {
   assert(SafepointSynchronize::is_at_safepoint(), "should be at safepoint");
   assert(Thread::current() == (Thread*)VMThread::vm_thread(),
          "should be in vm thread");
-
-  ParallelScavengeHeap* heap = ParallelScavengeHeap::heap();
-  GCCause::Cause gc_cause = heap->gc_cause();
-  assert(!heap->is_gc_active(), "not reentrant");
-
-  PSAdaptiveSizePolicy* policy = heap->size_policy();
   IsGCActiveMark mark;
 
   if (ScavengeBeforeFullGC) {
     PSScavenge::invoke_no_policy();
   }
 
-  const bool clear_all_soft_refs =
-    heap->soft_ref_policy()->should_clear_all_soft_refs();
-
-  PSParallelCompact::invoke_no_policy(clear_all_soft_refs ||
-                                      maximum_heap_compaction);
+  PSParallelCompact::invoke_no_policy(maximum_heap_compaction ||
+                                      ParallelScavengeHeap::heap()->soft_ref_policy()->should_clear_all_soft_refs());
 }
 
 // This method contains no policy. You should probably

@@ -29,7 +29,7 @@
 #include "gc/shared/generation.hpp"
 #include "gc/shared/oopStorageParState.hpp"
 #include "gc/shared/preGCValues.hpp"
-#include "gc/shared/softRefGenPolicy.hpp"
+#include "gc/shared/softRefPolicy.hpp"
 
 class AdaptiveSizePolicy;
 class CardTableRS;
@@ -73,7 +73,7 @@ private:
   // The singleton CardTable Remembered Set.
   CardTableRS* _rem_set;
 
-  SoftRefGenPolicy _soft_ref_gen_policy;
+  SoftRefPolicy _soft_ref_policy;
 
   // The sizing of the heap is controlled by a sizing policy.
   AdaptiveSizePolicy* _size_policy;
@@ -163,7 +163,7 @@ public:
   GenerationSpec* young_gen_spec() const;
   GenerationSpec* old_gen_spec() const;
 
-  virtual SoftRefPolicy* soft_ref_policy() { return &_soft_ref_gen_policy; }
+  virtual SoftRefPolicy* soft_ref_policy() { return &_soft_ref_policy; }
 
   // Adaptive size policy
   virtual AdaptiveSizePolicy* size_policy() {

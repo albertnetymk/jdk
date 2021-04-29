@@ -94,7 +94,7 @@ GenCollectedHeap::GenCollectedHeap(Generation::Name young,
                                    MaxOldSize,
                                    GenAlignment)),
   _rem_set(NULL),
-  _soft_ref_gen_policy(),
+  _soft_ref_policy(),
   _size_policy(NULL),
   _gc_policy_counters(new GCPolicyCounters(policy_counters_name, 2, 2)),
   _incremental_collection_failed(false),
@@ -377,25 +377,7 @@ HeapWord* GenCollectedHeap::mem_allocate_work(size_t size,
          continue;  // Retry and/or stall as necessary.
       }
 
-      // Allocation has failed and a collection
-      // has been done.  If the gc time limit was exceeded the
-      // this time, return NULL so that an out-of-memory
-      // will be thrown.  Clear gc_overhead_limit_exceeded
-      // so that the overhead exceeded does not persist.
-
-      const bool limit_exceeded = size_policy()->gc_overhead_limit_exceeded();
-      const bool softrefs_clear = soft_ref_policy()->all_soft_refs_clear();
-
-      if (limit_exceeded && softrefs_clear) {
-        *gc_overhead_limit_was_exceeded = true;
-        size_policy()->set_gc_overhead_limit_exceeded(false);
-        if (op.result() != NULL) {
-          CollectedHeap::fill_with_object(op.result(), size);
-        }
-        return NULL;
-      }
-      assert(result == NULL || is_in_reserved(result),
-             "result not in heap");
+      assert(result == NULL || is_in_reserved(result), "result not in heap");
       return result;
     }
 

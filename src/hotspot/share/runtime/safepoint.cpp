@@ -166,9 +166,6 @@ void SafepointSynchronize::decrement_waiting_to_block() {
 }
 
 bool SafepointSynchronize::thread_not_running(ThreadSafepointState *cur_state) {
-  if (!cur_state->is_running()) {
-    return true;
-  }
   cur_state->examine_state_of_thread(SafepointSynchronize::safepoint_counter());
   if (!cur_state->is_running()) {
     return true;

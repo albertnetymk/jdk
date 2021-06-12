@@ -93,7 +93,7 @@ void TaskTerminator::reset_for_reuse() {
   if (_offered_termination != 0) {
     assert(_offered_termination == _n_threads,
            "Only %u of %u threads offered termination", _offered_termination, _n_threads);
-    assert(_spin_master == NULL, "Leftover spin master " PTR_FORMAT, p2i(_spin_master));
+    assert(_spin_master == NULL, "Total: %u, Leftover spin master " PTR_FORMAT, _n_threads, p2i(_spin_master));
     _offered_termination = 0;
   }
 }
@@ -131,7 +131,7 @@ void TaskTerminator::prepare_for_return(Thread* this_thread, size_t tasks) {
 
 bool TaskTerminator::offer_termination(TerminatorTerminator* terminator) {
   assert(_n_threads > 0, "Initialization is incorrect");
-  assert(_offered_termination < _n_threads, "Invariant");
+  assert(_offered_termination < _n_threads, "Invariant: %u < %u", _offered_termination, _n_threads);
 
   // Single worker, done
   if (_n_threads == 1) {

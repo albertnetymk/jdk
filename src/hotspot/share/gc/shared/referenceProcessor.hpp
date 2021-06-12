@@ -160,6 +160,7 @@ public:
 // straightforward manner in a general, non-generational, non-contiguous generation
 // (or heap) setting.
 class ReferenceProcessor : public ReferenceDiscoverer {
+  friend class RefProcAllPhasesTask;
   friend class RefProcPhase1Task;
   friend class RefProcPhase2Task;
   friend class RefProcPhase3Task;
@@ -236,7 +237,10 @@ private:
   DiscoveredList* _discoveredFinalRefs;
   DiscoveredList* _discoveredPhantomRefs;
 
-  void run_task(RefProcTask& task, RefProcProxyTask& proxy_task, bool marks_oops_alive);
+  void run_task(RefProcTask& rp_task, RefProcProxyTask& proxy_task);
+
+  void process_all_refs(RefProcProxyTask& proxy_task,
+                        ReferenceProcessorPhaseTimes& phase_times);
 
   // Phase 1: Re-evaluate soft ref policy.
   void process_soft_ref_reconsider(RefProcProxyTask& proxy_task,
@@ -605,6 +609,13 @@ public:
                        BoolObjectClosure* is_alive,
                        OopClosure* keep_alive,
                        VoidClosure* complete_gc) = 0;
+
+  virtual void new_rp_work(uint worker_id,
+                           BoolObjectClosure* is_alive,
+                           OopClosure* keep_alive,
+                           VoidClosure* complete_gc,
+                           RefProcProxyTask* proxy_task
+                           ) {}
 };
 
 /*
@@ -615,20 +626,14 @@ public:
  */
 class RefProcProxyTask : public AbstractGangTask {
 protected:
-  const uint _max_workers;
   RefProcTask* _rp_task;
-  RefProcThreadModel _tm;
-  uint _queue_count;
-  bool _marks_oops_alive;
 
 public:
-  RefProcProxyTask(const char* name, uint max_workers) : AbstractGangTask(name), _max_workers(max_workers), _rp_task(nullptr),_tm(RefProcThreadModel::Single), _queue_count(0), _marks_oops_alive(false) {}
+  const uint _total_workers;
+  RefProcProxyTask(const char* name, uint total_workers);
 
-  void prepare_run_task(RefProcTask& rp_task, uint queue_count, RefProcThreadModel tm, bool marks_oops_alive) {
+  void prepare_run_task(RefProcTask& rp_task) {
     _rp_task = &rp_task;
-    _tm = tm;
-    _queue_count = queue_count;
-    _marks_oops_alive = marks_oops_alive;
     prepare_run_task_hook();
   }
 

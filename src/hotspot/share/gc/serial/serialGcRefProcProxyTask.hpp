@@ -40,8 +40,8 @@ public:
       _complete_gc(complete_gc) {}
 
   void work(uint worker_id) override {
-    assert(worker_id < _max_workers, "sanity");
-    _rp_task->rp_work(worker_id, &_is_alive, &_keep_alive, &_complete_gc);
+    assert(worker_id < _total_workers, "sanity");
+    _rp_task->new_rp_work(worker_id, &_is_alive, &_keep_alive, &_complete_gc, this);
   }
 };
 

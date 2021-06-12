@@ -2059,20 +2059,22 @@ class ParallelCompactRefProcProxyTask : public RefProcProxyTask {
   TaskTerminator _terminator;
 
 public:
-  ParallelCompactRefProcProxyTask(uint max_workers)
-    : RefProcProxyTask("ParallelCompactRefProcProxyTask", max_workers),
-      _terminator(_max_workers, ParCompactionManager::oop_task_queues()) {}
+  ParallelCompactRefProcProxyTask(uint total_workers)
+    : RefProcProxyTask("ParallelCompactRefProcProxyTask", total_workers),
+      _terminator(_total_workers, ParCompactionManager::oop_task_queues()) {}
 
   void work(uint worker_id) override {
-    assert(worker_id < _max_workers, "sanity");
-    ParCompactionManager* cm = (_tm == RefProcThreadModel::Single) ? ParCompactionManager::get_vmthread_cm() : ParCompactionManager::gc_thread_compaction_manager(worker_id);
+    assert(worker_id < _total_workers, "sanity");
+    ParCompactionManager* cm = _total_workers == 1
+            ? ParCompactionManager::get_vmthread_cm()
+            : ParCompactionManager::gc_thread_compaction_manager(worker_id);
     PCMarkAndPushClosure keep_alive(cm);
-    ParCompactionManager::FollowStackClosure complete_gc(cm, (_tm == RefProcThreadModel::Single) ? nullptr : &_terminator, worker_id);
-    _rp_task->rp_work(worker_id, PSParallelCompact::is_alive_closure(), &keep_alive, &complete_gc);
+    ParCompactionManager::FollowStackClosure complete_gc(cm, &_terminator, worker_id);
+    _rp_task->new_rp_work(worker_id, PSParallelCompact::is_alive_closure(), &keep_alive, &complete_gc, this);
   }
 
   void prepare_run_task_hook() override {
-    _terminator.reset_for_reuse(_queue_count);
+    _terminator.reset_for_reuse();
   }
 };
 
@@ -2101,8 +2103,7 @@ void PSParallelCompact::marking_phase(ParCompactionManager* cm,
     ReferenceProcessorStats stats;
     ReferenceProcessorPhaseTimes pt(&_gc_timer, ref_processor()->max_num_queues());
 
-    ref_processor()->set_active_mt_degree(active_gc_threads);
-    ParallelCompactRefProcProxyTask task(ref_processor()->max_num_queues());
+    ParallelCompactRefProcProxyTask task(active_gc_threads);
     stats = ref_processor()->process_discovered_references(task, pt);
 
     gc_tracer->report_gc_reference_stats(stats);

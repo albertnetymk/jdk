@@ -1468,18 +1468,18 @@ class G1CMRefProcProxyTask : public RefProcProxyTask {
   G1ConcurrentMark& _cm;
 
 public:
-  G1CMRefProcProxyTask(uint max_workers, G1CollectedHeap& g1h, G1ConcurrentMark &cm)
-    : RefProcProxyTask("G1CMRefProcProxyTask", max_workers),
+  G1CMRefProcProxyTask(uint total_workers, G1CollectedHeap& g1h, G1ConcurrentMark &cm)
+    : RefProcProxyTask("G1CMRefProcProxyTask", total_workers),
       _g1h(g1h),
       _cm(cm) {}
 
   void work(uint worker_id) override {
-    assert(worker_id < _max_workers, "sanity");
+    assert(worker_id < _total_workers, "sanity");
+    const bool is_serial = _total_workers == 1;
     G1CMIsAliveClosure is_alive(&_g1h);
-    uint index = (_tm == RefProcThreadModel::Single) ? 0 : worker_id;
-    G1CMKeepAliveAndDrainClosure keep_alive(&_cm, _cm.task(index), _tm == RefProcThreadModel::Single);
-    G1CMDrainMarkingStackClosure complete_gc(&_cm, _cm.task(index), _tm == RefProcThreadModel::Single);
-    _rp_task->rp_work(worker_id, &is_alive, &keep_alive, &complete_gc);
+    G1CMKeepAliveAndDrainClosure keep_alive(&_cm, _cm.task(worker_id), is_serial);
+    G1CMDrainMarkingStackClosure complete_gc(&_cm, _cm.task(worker_id), is_serial);
+    _rp_task->new_rp_work(worker_id, &is_alive, &keep_alive, &complete_gc, this);
   }
 
   void prepare_run_task_hook() override {
@@ -1487,7 +1487,7 @@ public:
     // proxy task execution, so that the termination protocol
     // and overflow handling in G1CMTask::do_marking_step() knows
     // how many workers to wait for.
-    _cm.set_concurrency(_queue_count);
+    _cm.set_concurrency(_total_workers);
   }
 };
 
@@ -1527,8 +1527,8 @@ void G1ConcurrentMark::weak_refs_work(bool clear_all_soft_refs) {
     rp->set_active_mt_degree(active_workers);
 
     // Parallel processing task executor.
-    G1CMRefProcProxyTask task(rp->max_num_queues(), *_g1h, *this);
-    ReferenceProcessorPhaseTimes pt(_gc_timer_cm, rp->max_num_queues());
+    G1CMRefProcProxyTask task(active_workers, *_g1h, *this);
+    ReferenceProcessorPhaseTimes pt(_gc_timer_cm, active_workers);
 
     // Process the weak references.
     const ReferenceProcessorStats& stats = rp->process_discovered_references(task, pt);

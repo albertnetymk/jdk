@@ -250,17 +250,16 @@ class G1FullGCRefProcProxyTask : public RefProcProxyTask {
   G1FullCollector& _collector;
 
 public:
-  G1FullGCRefProcProxyTask(G1FullCollector &collector, uint max_workers)
-    : RefProcProxyTask("G1FullGCRefProcProxyTask", max_workers),
+  G1FullGCRefProcProxyTask(G1FullCollector &collector, uint total_workers)
+    : RefProcProxyTask("G1FullGCRefProcProxyTask", total_workers),
       _collector(collector) {}
 
   void work(uint worker_id) override {
-    assert(worker_id < _max_workers, "sanity");
+    assert(worker_id < _total_workers, "sanity");
     G1IsAliveClosure is_alive(&_collector);
-    uint index = (_tm == RefProcThreadModel::Single) ? 0 : worker_id;
-    G1FullKeepAliveClosure keep_alive(_collector.marker(index));
-    G1FollowStackClosure* complete_gc = _collector.marker(index)->stack_closure();
-    _rp_task->rp_work(worker_id, &is_alive, &keep_alive, complete_gc);
+    G1FullKeepAliveClosure keep_alive(_collector.marker(worker_id));
+    G1FollowStackClosure* complete_gc = _collector.marker(worker_id)->stack_closure();
+    _rp_task->new_rp_work(worker_id, &is_alive, &keep_alive, complete_gc, this);
   }
 };
 
@@ -276,11 +275,10 @@ void G1FullCollector::phase1_mark_live_objects() {
 
   {
     uint old_active_mt_degree = reference_processor()->num_queues();
-    reference_processor()->set_active_mt_degree(workers());
     GCTraceTime(Debug, gc, phases) debug("Phase 1: Reference Processing", scope()->timer());
     // Process reference objects found during marking.
-    ReferenceProcessorPhaseTimes pt(scope()->timer(), reference_processor()->max_num_queues());
-    G1FullGCRefProcProxyTask task(*this, reference_processor()->max_num_queues());
+    ReferenceProcessorPhaseTimes pt(scope()->timer(), workers());
+    G1FullGCRefProcProxyTask task(*this, workers());
     const ReferenceProcessorStats& stats = reference_processor()->process_discovered_references(task, pt);
     scope()->tracer()->report_gc_reference_stats(stats);
     pt.print_all_references();

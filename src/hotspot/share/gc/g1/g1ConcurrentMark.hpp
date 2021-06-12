@@ -362,7 +362,6 @@ class G1ConcurrentMark : public CHeapObj<mtGC> {
 
   void finalize_marking();
 
-  void weak_refs_work_parallel_part(BoolObjectClosure* is_alive, bool purged_classes);
   void weak_refs_work(bool clear_all_soft_refs);
 
   void report_object_count(bool mark_completed);

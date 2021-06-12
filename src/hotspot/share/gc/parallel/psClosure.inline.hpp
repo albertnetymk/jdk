@@ -39,9 +39,10 @@ public:
   virtual void do_oop(narrowOop* p) { ShouldNotReachHere(); }
 
   virtual void do_oop(oop* p)       {
-    if (PSScavenge::should_scavenge(p)) {
-      oop o = RawAccess<IS_NOT_NULL>::oop_load(p);
-      assert(o->is_forwarded(), "Objects are already forwarded before weak processing");
+    oop o = RawAccess<IS_NOT_NULL>::oop_load(p);
+    assert(PSScavenge::should_scavenge(p) == o->is_forwarded(),
+           "Objects that should be scavenged are already forwarded before weak processing");
+    if (o->is_forwarded()) {
       oop new_obj = o->forwardee();
       if (log_develop_is_enabled(Trace, gc, scavenge)) {
         ResourceMark rm; // required by internal_name()

@@ -203,42 +203,61 @@ ReferenceProcessorStats ReferenceProcessor::process_discovered_references(RefPro
   // Stop treating discovered references specially.
   disable_discovery();
 
-  // If discovery was concurrent, someone could have modified
-  // the value of the static field in the j.l.r.SoftReference
-  // class that holds the soft reference timestamp clock using
-  // reflection or Unsafe between when discovery was enabled and
-  // now. Unconditionally update the static field in ReferenceProcessor
-  // here so that we use the new value during processing of the
-  // discovered soft refs.
+  size_t const num_soft_refs = total_count(_discoveredSoftRefs);
+  size_t const num_weak_refs = total_count(_discoveredWeakRefs);
+  size_t const num_final_refs = total_count(_discoveredFinalRefs);
+  size_t const num_phantom_refs = total_count(_discoveredPhantomRefs);
 
-  _soft_ref_timestamp_clock = java_lang_ref_SoftReference::clock();
+  ReferenceProcessorStats stats(num_soft_refs,
+                                num_weak_refs,
+                                num_final_refs,
+                                num_phantom_refs);
 
-  ReferenceProcessorStats stats(total_count(_discoveredSoftRefs),
-                                total_count(_discoveredWeakRefs),
-                                total_count(_discoveredFinalRefs),
-                                total_count(_discoveredPhantomRefs));
+  phase_times.set_ref_discovered(REF_SOFT, num_soft_refs);
+  phase_times.set_ref_discovered(REF_WEAK, num_weak_refs);
+  phase_times.set_ref_discovered(REF_FINAL, num_final_refs);
+  phase_times.set_ref_discovered(REF_PHANTOM, num_phantom_refs);
 
-  {
-    RefProcTotalPhaseTimesTracker tt(RefPhase1, &phase_times);
-    process_soft_ref_reconsider(proxy_task, phase_times);
-  }
+  set_active_mt_degree(proxy_task._total_workers);
 
-  update_soft_ref_master_clock();
+  maybe_balance_queues(_discoveredSoftRefs);
+  maybe_balance_queues(_discoveredWeakRefs);
+  maybe_balance_queues(_discoveredFinalRefs);
+  maybe_balance_queues(_discoveredPhantomRefs);
 
-  {
-    RefProcTotalPhaseTimesTracker tt(RefPhase2, &phase_times);
-    process_soft_weak_final_refs(proxy_task, phase_times);
-  }
+  process_all_refs(proxy_task, phase_times);
 
-  {
-    RefProcTotalPhaseTimesTracker tt(RefPhase3, &phase_times);
-    process_final_keep_alive(proxy_task, phase_times);
-  }
+  verify_total_count_zero(_discoveredSoftRefs, "SoftReference");
+  verify_total_count_zero(_discoveredWeakRefs, "WeakReference");
+  verify_total_count_zero(_discoveredFinalRefs, "FinalReference");
+  verify_total_count_zero(_discoveredPhantomRefs, "PhantomReference");
 
-  {
-    RefProcTotalPhaseTimesTracker tt(RefPhase4, &phase_times);
-    process_phantom_refs(proxy_task, phase_times);
-  }
+  // {
+  //   RefProcTotalPhaseTimesTracker tt(RefPhase1, &phase_times);
+  //   if (!discovery_is_atomic()) {
+  //     // the master clock probably has advanced since the discovery is *not*
+  //     // atomic, so update our local copy of the master clock
+  //     _soft_ref_timestamp_clock = java_lang_ref_SoftReference::clock();
+  //     process_soft_ref_reconsider(proxy_task, phase_times);
+  //   }
+  // }
+
+  // update_soft_ref_master_clock();
+
+  // {
+  //   RefProcTotalPhaseTimesTracker tt(RefPhase2, &phase_times);
+  //   process_soft_weak_final_refs(proxy_task, phase_times);
+  // }
+
+  // {
+  //   RefProcTotalPhaseTimesTracker tt(RefPhase3, &phase_times);
+  //   process_final_keep_alive(proxy_task, phase_times);
+  // }
+
+  // {
+  //   RefProcTotalPhaseTimesTracker tt(RefPhase4, &phase_times);
+  //   process_phantom_refs(proxy_task, phase_times);
+  // }
 
   phase_times.set_total_time_ms((os::elapsedTime() - start_time) * 1000);
 
@@ -509,7 +528,102 @@ size_t ReferenceProcessor::total_reference_count(ReferenceType type) const {
   return total_count(list);
 }
 
+RefProcProxyTask::RefProcProxyTask(const char *name, uint total_workers) :
+  AbstractGangTask(name),
+  _rp_task(nullptr),
+  _total_workers(ParallelRefProcEnabled ? total_workers : 1) {}
 
+
+class RefProcAllPhasesTask : public RefProcTask {
+  volatile int progress = 0;
+  volatile uint barrier = 0;
+  const uint _num_workers;
+  void run_phase2(uint worker_id,
+                  DiscoveredList list[],
+                  BoolObjectClosure* is_alive,
+                  OopClosure* keep_alive,
+                  bool do_enqueue_and_clear,
+                  ReferenceType ref_type) {
+    size_t const removed = _ref_processor.process_soft_weak_final_refs_work(list[worker_id],
+                                                                            is_alive,
+                                                                            keep_alive,
+                                                                            do_enqueue_and_clear);
+    _phase_times->add_ref_cleared(ref_type, removed);
+  }
+public:
+  RefProcAllPhasesTask(ReferenceProcessor& ref_processor,
+                       ReferenceProcessorPhaseTimes* phase_times,
+                       RefProcProxyTask* proxy_task)
+          : RefProcTask(ref_processor, phase_times),
+            _num_workers(ref_processor.num_queues())
+            {
+    proxy_task->prepare_run_task(*this);
+  }
+
+  void rp_work(uint worker_id,
+                   BoolObjectClosure* is_alive,
+                   OopClosure* keep_alive,
+                   VoidClosure* complete_gc) override { }
+
+    void new_rp_work(uint worker_id,
+               BoolObjectClosure* is_alive,
+               OopClosure* keep_alive,
+               VoidClosure* complete_gc,
+               RefProcProxyTask* proxy_task) override {
+    if (proxy_task->_total_workers == 1) {
+      assert(Thread::current()->is_VM_thread(), "vm thread");
+    } else {
+      assert(!Thread::current()->is_VM_thread(), "not vm thread");
+    }
+    ResourceMark rm;
+    {
+      RefProcSubPhasesWorkerTimeTracker tt(ReferenceProcessor::SoftRefSubPhase2, _phase_times, worker_id);
+      run_phase2(worker_id, _ref_processor._discoveredSoftRefs, is_alive, keep_alive, true /* do_enqueue_and_clear */, REF_SOFT);
+    }
+    {
+      RefProcSubPhasesWorkerTimeTracker tt(ReferenceProcessor::WeakRefSubPhase2, _phase_times, worker_id);
+      run_phase2(worker_id, _ref_processor._discoveredWeakRefs, is_alive, keep_alive, true /* do_enqueue_and_clear */, REF_WEAK);
+    }
+    {
+      RefProcSubPhasesWorkerTimeTracker tt(ReferenceProcessor::FinalRefSubPhase2, _phase_times, worker_id);
+      run_phase2(worker_id, _ref_processor._discoveredFinalRefs, is_alive, keep_alive, false /* do_enqueue_and_clear */, REF_FINAL);
+    }
+    // Close the reachable set; needed for collectors which keep_alive_closure do
+    // not immediately complete their work.
+    complete_gc->do_void();
+
+    if (Atomic::add(&barrier, 1u) == _ref_processor.num_queues()) {
+      // last one crossing the barrier
+      proxy_task->prepare_run_task_hook();
+      Atomic::store(&barrier, 0u);
+      Atomic::store(&progress, 2);
+    } else {
+      while (Atomic::load(&progress) < 2) ;
+    }
+
+    // final refs
+    _ref_processor.process_final_keep_alive_work(_ref_processor._discoveredFinalRefs[worker_id], keep_alive, complete_gc);
+
+      if (Atomic::add(&barrier, 1u) == _ref_processor.num_queues()) {
+        // last one crossing the barrier
+        proxy_task->prepare_run_task_hook();
+        Atomic::store(&barrier, 0u);
+        Atomic::store(&progress, 4);
+      } else {
+        while (Atomic::load(&progress) < 4) ;
+      }
+
+      // phantom refs
+    {
+    size_t const removed = _ref_processor.process_phantom_refs_work(_ref_processor._discoveredPhantomRefs[worker_id],
+                                                                    is_alive,
+                                                                    keep_alive,
+                                                                    complete_gc);
+    _phase_times->add_ref_cleared(REF_PHANTOM, removed);
+    }
+  }
+
+};
 
 class RefProcPhase1Task : public RefProcTask {
 public:
@@ -660,7 +774,6 @@ void ReferenceProcessor::set_active_mt_degree(uint v) {
 }
 
 bool ReferenceProcessor::need_balance_queues(DiscoveredList refs_lists[]) {
-  assert(processing_is_mt(), "why balance non-mt processing?");
   // _num_queues is the processing degree.  Only list entries up to
   // _num_queues will be processed, so any non-empty lists beyond
   // that must be redistributed to lists in that range.  Even if not
@@ -682,7 +795,6 @@ bool ReferenceProcessor::need_balance_queues(DiscoveredList refs_lists[]) {
 }
 
 void ReferenceProcessor::maybe_balance_queues(DiscoveredList refs_lists[]) {
-  assert(processing_is_mt(), "Should not call this otherwise");
   if (need_balance_queues(refs_lists)) {
     balance_queues(refs_lists);
   }
@@ -772,13 +884,8 @@ void ReferenceProcessor::balance_queues(DiscoveredList ref_lists[])
 #endif
 }
 
-void ReferenceProcessor::run_task(RefProcTask& task, RefProcProxyTask& proxy_task, bool marks_oops_alive) {
-  log_debug(gc, ref)("ReferenceProcessor::execute queues: %d, %s, marks_oops_alive: %s",
-                     num_queues(),
-                     processing_is_mt() ? "RefProcThreadModel::Multi" : "RefProcThreadModel::Single",
-                     marks_oops_alive ? "true" : "false");
-
-  proxy_task.prepare_run_task(task, num_queues(), processing_is_mt() ? RefProcThreadModel::Multi : RefProcThreadModel::Single, marks_oops_alive);
+void ReferenceProcessor::run_task(RefProcTask& rp_task, RefProcProxyTask& proxy_task) {
+  proxy_task.prepare_run_task(rp_task);
   if (processing_is_mt()) {
     WorkGang* gang = Universe::heap()->safepoint_workers();
     assert(gang != NULL, "can not dispatch multi threaded without a work gang");
@@ -787,10 +894,14 @@ void ReferenceProcessor::run_task(RefProcTask& task, RefProcProxyTask& proxy_tas
            num_queues(), gang->active_workers());
     gang->run_task(&proxy_task, num_queues());
   } else {
-    for (unsigned i = 0; i < _max_num_queues; ++i) {
-      proxy_task.work(i);
-    }
+    proxy_task.work(0);
   }
+}
+
+void ReferenceProcessor::process_all_refs(RefProcProxyTask& proxy_task,
+                                          ReferenceProcessorPhaseTimes& phase_times) {
+  RefProcAllPhasesTask rp_task(*this, &phase_times, &proxy_task);
+  run_task(rp_task, proxy_task);
 }
 
 void ReferenceProcessor::process_soft_ref_reconsider(RefProcProxyTask& proxy_task,
@@ -821,7 +932,7 @@ void ReferenceProcessor::process_soft_ref_reconsider(RefProcProxyTask& proxy_tas
 
   log_reflist("Phase 1 Soft before", _discoveredSoftRefs, _max_num_queues);
   RefProcPhase1Task phase1(*this, &phase_times, _current_soft_ref_policy);
-  run_task(phase1, proxy_task, true);
+  run_task(phase1, proxy_task);
   log_reflist("Phase 1 Soft after", _discoveredSoftRefs, _max_num_queues);
 }
 
@@ -858,7 +969,7 @@ void ReferenceProcessor::process_soft_weak_final_refs(RefProcProxyTask& proxy_ta
   log_reflist("Phase 2 Final before", _discoveredFinalRefs, _max_num_queues);
 
   RefProcPhase2Task phase2(*this, &phase_times);
-  run_task(phase2, proxy_task, false);
+  run_task(phase2, proxy_task);
 
   verify_total_count_zero(_discoveredSoftRefs, "SoftReference");
   verify_total_count_zero(_discoveredWeakRefs, "WeakReference");
@@ -887,7 +998,7 @@ void ReferenceProcessor::process_final_keep_alive(RefProcProxyTask& proxy_task,
   // . Traverse referents of final references and keep them and followers alive.
   RefProcPhaseTimeTracker tt(RefPhase3, &phase_times);
   RefProcPhase3Task phase3(*this, &phase_times);
-  run_task(phase3, proxy_task, true);
+  run_task(phase3, proxy_task);
 
   verify_total_count_zero(_discoveredFinalRefs, "FinalReference");
 }
@@ -917,7 +1028,7 @@ void ReferenceProcessor::process_phantom_refs(RefProcProxyTask& proxy_task,
   log_reflist("Phase 4 Phantom before", _discoveredPhantomRefs, _max_num_queues);
 
   RefProcPhase4Task phase4(*this, &phase_times);
-  run_task(phase4, proxy_task, false);
+  run_task(phase4, proxy_task);
 
   verify_total_count_zero(_discoveredPhantomRefs, "PhantomReference");
 }

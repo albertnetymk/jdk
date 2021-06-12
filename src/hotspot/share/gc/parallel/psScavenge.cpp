@@ -202,21 +202,23 @@ class ParallelScavengeRefProcProxyTask : public RefProcProxyTask {
   TaskTerminator _terminator;
 
 public:
-  ParallelScavengeRefProcProxyTask(uint max_workers)
-    : RefProcProxyTask("ParallelScavengeRefProcProxyTask", max_workers),
-      _terminator(max_workers, ParCompactionManager::oop_task_queues()) {}
+  ParallelScavengeRefProcProxyTask(uint total_workers)
+    : RefProcProxyTask("ParallelScavengeRefProcProxyTask", total_workers),
+      _terminator(_total_workers, ParCompactionManager::oop_task_queues()) {}
 
   void work(uint worker_id) override {
-    assert(worker_id < _max_workers, "sanity");
-    PSPromotionManager* promotion_manager = (_tm == RefProcThreadModel::Single) ? PSPromotionManager::vm_thread_promotion_manager() : PSPromotionManager::gc_thread_promotion_manager(worker_id);
+    assert(worker_id < _total_workers, "sanity");
+    PSPromotionManager* promotion_manager = _total_workers == 1
+            ? PSPromotionManager::vm_thread_promotion_manager()
+            : PSPromotionManager::gc_thread_promotion_manager(worker_id);
     PSIsAliveClosure is_alive;
     PSKeepAliveClosure keep_alive(promotion_manager);;
-    PSEvacuateFollowersClosure complete_gc(promotion_manager, (_marks_oops_alive && _tm == RefProcThreadModel::Multi) ? &_terminator : nullptr, worker_id);;
-    _rp_task->rp_work(worker_id, &is_alive, &keep_alive, &complete_gc);
+    PSEvacuateFollowersClosure complete_gc(promotion_manager, &_terminator, worker_id);;
+    _rp_task->new_rp_work(worker_id, &is_alive, &keep_alive, &complete_gc, this);
   }
 
   void prepare_run_task_hook() override {
-    _terminator.reset_for_reuse(_queue_count);
+    _terminator.reset_for_reuse();
   }
 };
 
@@ -487,12 +489,9 @@ bool PSScavenge::invoke_no_policy() {
       GCTraceTime(Debug, gc, phases) tm("Reference Processing", &_gc_timer);
 
       reference_processor()->setup_policy(false); // not always_clear
-      reference_processor()->set_active_mt_degree(active_workers);
-      ReferenceProcessorStats stats;
-      ReferenceProcessorPhaseTimes pt(&_gc_timer, reference_processor()->max_num_queues());
-
-      ParallelScavengeRefProcProxyTask task(reference_processor()->max_num_queues());
-      stats = reference_processor()->process_discovered_references(task, pt);
+      ReferenceProcessorPhaseTimes pt(&_gc_timer, active_workers);
+      ParallelScavengeRefProcProxyTask task(active_workers);
+      ReferenceProcessorStats stats = reference_processor()->process_discovered_references(task, pt);
 
       _gc_tracer.report_gc_reference_stats(stats);
       pt.print_all_references();

@@ -202,12 +202,12 @@ class ParallelScavengeRefProcProxyTask : public RefProcProxyTask {
   TaskTerminator _terminator;
 
 public:
-  ParallelScavengeRefProcProxyTask(uint max_workers)
-    : RefProcProxyTask("ParallelScavengeRefProcProxyTask", max_workers),
-      _terminator(max_workers, ParCompactionManager::oop_task_queues()) {}
+  explicit ParallelScavengeRefProcProxyTask()
+    : RefProcProxyTask("ParallelScavengeRefProcProxyTask"),
+      _terminator(_queue_count, ParCompactionManager::oop_task_queues()) {}
 
   void work(uint worker_id) override {
-    assert(worker_id < _max_workers, "sanity");
+    assert(worker_id < _queue_count, "sanity");
     PSPromotionManager* promotion_manager = (_tm == RefProcThreadModel::Single) ? PSPromotionManager::vm_thread_promotion_manager() : PSPromotionManager::gc_thread_promotion_manager(worker_id);
     PSIsAliveClosure is_alive;
     PSKeepAliveClosure keep_alive(promotion_manager);;
@@ -491,7 +491,7 @@ bool PSScavenge::invoke_no_policy() {
       ReferenceProcessorStats stats;
       ReferenceProcessorPhaseTimes pt(&_gc_timer, reference_processor()->max_num_queues());
 
-      ParallelScavengeRefProcProxyTask task(reference_processor()->max_num_queues());
+      ParallelScavengeRefProcProxyTask task;
       stats = reference_processor()->process_discovered_references(task, pt);
 
       _gc_tracer.report_gc_reference_stats(stats);

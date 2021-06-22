@@ -250,12 +250,12 @@ class G1FullGCRefProcProxyTask : public RefProcProxyTask {
   G1FullCollector& _collector;
 
 public:
-  G1FullGCRefProcProxyTask(G1FullCollector &collector, uint max_workers)
-    : RefProcProxyTask("G1FullGCRefProcProxyTask", max_workers),
+  G1FullGCRefProcProxyTask(G1FullCollector &collector)
+    : RefProcProxyTask("G1FullGCRefProcProxyTask"),
       _collector(collector) {}
 
   void work(uint worker_id) override {
-    assert(worker_id < _max_workers, "sanity");
+    assert(worker_id < _queue_count, "sanity");
     G1IsAliveClosure is_alive(&_collector);
     uint index = (_tm == RefProcThreadModel::Single) ? 0 : worker_id;
     G1FullKeepAliveClosure keep_alive(_collector.marker(index));
@@ -280,7 +280,7 @@ void G1FullCollector::phase1_mark_live_objects() {
     GCTraceTime(Debug, gc, phases) debug("Phase 1: Reference Processing", scope()->timer());
     // Process reference objects found during marking.
     ReferenceProcessorPhaseTimes pt(scope()->timer(), reference_processor()->max_num_queues());
-    G1FullGCRefProcProxyTask task(*this, reference_processor()->max_num_queues());
+    G1FullGCRefProcProxyTask task(*this);
     const ReferenceProcessorStats& stats = reference_processor()->process_discovered_references(task, pt);
     scope()->tracer()->report_gc_reference_stats(stats);
     pt.print_all_references();

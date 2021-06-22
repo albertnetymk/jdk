@@ -3234,15 +3234,15 @@ class G1STWRefProcProxyTask : public RefProcProxyTask {
   G1ScannerTasksQueueSet& _task_queues;
 
 public:
-  G1STWRefProcProxyTask(uint max_workers, G1CollectedHeap& g1h, G1ParScanThreadStateSet& pss, G1ScannerTasksQueueSet& task_queues)
-    : RefProcProxyTask("G1STWRefProcProxyTask", max_workers),
+  G1STWRefProcProxyTask(G1CollectedHeap& g1h, G1ParScanThreadStateSet& pss, G1ScannerTasksQueueSet& task_queues)
+    : RefProcProxyTask("G1STWRefProcProxyTask"),
       _g1h(g1h),
       _pss(pss),
-      _terminator(max_workers, &task_queues),
+      _terminator(_queue_count, &task_queues),
       _task_queues(task_queues) {}
 
   void work(uint worker_id) override {
-    assert(worker_id < _max_workers, "sanity");
+    assert(worker_id < _queue_count, "sanity");
     uint index = (_tm == RefProcThreadModel::Single) ? 0 : worker_id;
     _pss.state_for_worker(index)->set_ref_discoverer(nullptr);
     G1STWIsAliveClosure is_alive(&_g1h);
@@ -3283,7 +3283,7 @@ void G1CollectedHeap::process_discovered_references(G1ParScanThreadStateSet* per
          no_of_gc_workers,  rp->max_num_queues());
 
   rp->set_active_mt_degree(no_of_gc_workers);
-  G1STWRefProcProxyTask task(rp->max_num_queues(), *this, *per_thread_states, *_task_queues);
+  G1STWRefProcProxyTask task(*this, *per_thread_states, *_task_queues);
   stats = rp->process_discovered_references(task, pt);
 
   _gc_tracer_stw->report_gc_reference_stats(stats);

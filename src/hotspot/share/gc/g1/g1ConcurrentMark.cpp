@@ -1469,13 +1469,13 @@ class G1CMRefProcProxyTask : public RefProcProxyTask {
   G1ConcurrentMark& _cm;
 
 public:
-  G1CMRefProcProxyTask(uint max_workers, G1CollectedHeap& g1h, G1ConcurrentMark &cm)
-    : RefProcProxyTask("G1CMRefProcProxyTask", max_workers),
+  G1CMRefProcProxyTask(G1CollectedHeap& g1h, G1ConcurrentMark &cm)
+    : RefProcProxyTask("G1CMRefProcProxyTask"),
       _g1h(g1h),
       _cm(cm) {}
 
   void work(uint worker_id) override {
-    assert(worker_id < _max_workers, "sanity");
+    assert(worker_id < _queue_count, "sanity");
     G1CMIsAliveClosure is_alive(&_g1h);
     uint index = (_tm == RefProcThreadModel::Single) ? 0 : worker_id;
     G1CMKeepAliveAndDrainClosure keep_alive(&_cm, _cm.task(index), _tm == RefProcThreadModel::Single);
@@ -1528,7 +1528,7 @@ void G1ConcurrentMark::weak_refs_work(bool clear_all_soft_refs) {
     rp->set_active_mt_degree(active_workers);
 
     // Parallel processing task executor.
-    G1CMRefProcProxyTask task(rp->max_num_queues(), *_g1h, *this);
+    G1CMRefProcProxyTask task(*_g1h, *this);
     ReferenceProcessorPhaseTimes pt(_gc_timer_cm, rp->max_num_queues());
 
     // Process the weak references.

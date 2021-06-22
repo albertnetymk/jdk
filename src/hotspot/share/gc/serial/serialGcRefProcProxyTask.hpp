@@ -34,13 +34,13 @@ class SerialGCRefProcProxyTask : public RefProcProxyTask {
 
 public:
   SerialGCRefProcProxyTask(BoolObjectClosure& is_alive, OopClosure& keep_alive, VoidClosure& complete_gc)
-    : RefProcProxyTask("SerialGCRefProcProxyTask", 1),
+    : RefProcProxyTask("SerialGCRefProcProxyTask"),
       _is_alive(is_alive),
       _keep_alive(keep_alive),
       _complete_gc(complete_gc) {}
 
   void work(uint worker_id) override {
-    assert(worker_id < _max_workers, "sanity");
+    assert(worker_id < _queue_count, "sanity");
     _rp_task->rp_work(worker_id, &_is_alive, &_keep_alive, &_complete_gc);
   }
 };

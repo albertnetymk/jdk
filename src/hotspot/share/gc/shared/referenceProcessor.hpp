@@ -277,9 +277,9 @@ private:
 
   // Keep alive followers of referents for FinalReferences. Must only be called for
   // those.
-  size_t process_final_keep_alive_work(DiscoveredList&    refs_list,
-                                       OopClosure*        keep_alive,
-                                       VoidClosure*       complete_gc);
+  void process_final_keep_alive_work(DiscoveredList&    refs_list,
+                                     OopClosure*        keep_alive,
+                                     VoidClosure*       complete_gc);
 
   size_t process_phantom_refs_work(DiscoveredList&    refs_list,
                                    BoolObjectClosure* is_alive,
@@ -593,14 +593,19 @@ public:
  */
 class RefProcProxyTask : public AbstractGangTask {
 protected:
-  const uint _max_workers;
   RefProcTask* _rp_task;
   RefProcThreadModel _tm;
+  // number of ref queues to process; one per worker. Therefore, it's also the number of workers.
   uint _queue_count;
   bool _marks_oops_alive;
 
 public:
-  RefProcProxyTask(const char* name, uint max_workers) : AbstractGangTask(name), _max_workers(max_workers), _rp_task(nullptr),_tm(RefProcThreadModel::Single), _queue_count(0), _marks_oops_alive(false) {}
+  RefProcProxyTask(const char* name)
+    : AbstractGangTask(name),
+      _rp_task(nullptr),
+      _tm(RefProcThreadModel::Single),
+      _queue_count(0),
+      _marks_oops_alive(false) {}
 
   void prepare_run_task(RefProcTask& rp_task, uint queue_count, RefProcThreadModel tm, bool marks_oops_alive) {
     _rp_task = &rp_task;

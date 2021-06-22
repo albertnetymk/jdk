@@ -407,9 +407,9 @@ size_t ReferenceProcessor::process_soft_weak_final_refs_work(DiscoveredList&    
   return iter.removed();
 }
 
-size_t ReferenceProcessor::process_final_keep_alive_work(DiscoveredList& refs_list,
-                                                         OopClosure*     keep_alive,
-                                                         VoidClosure*    complete_gc) {
+void ReferenceProcessor::process_final_keep_alive_work(DiscoveredList& refs_list,
+                                                       OopClosure*     keep_alive,
+                                                       VoidClosure*    complete_gc) {
   DiscoveredListIterator iter(refs_list, keep_alive, NULL);
   while (iter.has_next()) {
     iter.load_ptrs(DEBUG_ONLY(false /* allow_null_referent */));
@@ -430,7 +430,6 @@ size_t ReferenceProcessor::process_final_keep_alive_work(DiscoveredList& refs_li
   refs_list.clear();
 
   assert(iter.removed() == 0, "This phase does not remove anything.");
-  return iter.removed();
 }
 
 size_t ReferenceProcessor::process_phantom_refs_work(DiscoveredList&    refs_list,
@@ -525,12 +524,23 @@ public:
                OopClosure* keep_alive,
                VoidClosure* complete_gc) override {
     ResourceMark rm;
+    size_t removed = 0;
     RefProcSubPhasesWorkerTimeTracker tt(ReferenceProcessor::SoftRefSubPhase1, _phase_times, worker_id);
-    size_t const removed = _ref_processor.process_soft_ref_reconsider_work(_ref_processor._discoveredSoftRefs[worker_id],
-                                                                           _policy,
-                                                                           is_alive,
-                                                                           keep_alive,
-                                                                           complete_gc);
+    if (_ref_processor.processing_is_mt()) {
+      removed = _ref_processor.process_soft_ref_reconsider_work(_ref_processor._discoveredSoftRefs[worker_id],
+                                                                _policy,
+                                                                is_alive,
+                                                                keep_alive,
+                                                                complete_gc);
+    } else {
+      for (uint i = 0; i < _ref_processor.max_num_queues(); ++i) {
+        removed += _ref_processor.process_soft_ref_reconsider_work(_ref_processor._discoveredSoftRefs[i],
+                                                                   _policy,
+                                                                   is_alive,
+                                                                   keep_alive,
+                                                                   complete_gc);
+      }
+    }
     _phase_times->add_ref_cleared(REF_SOFT, removed);
   }
 
@@ -545,10 +555,20 @@ class RefProcPhase2Task: public RefProcTask {
                   OopClosure* keep_alive,
                   bool do_enqueue_and_clear,
                   ReferenceType ref_type) {
-    size_t const removed = _ref_processor.process_soft_weak_final_refs_work(list[worker_id],
-                                                                            is_alive,
-                                                                            keep_alive,
-                                                                            do_enqueue_and_clear);
+    size_t removed = 0;
+    if (_ref_processor.processing_is_mt()) {
+      removed = _ref_processor.process_soft_weak_final_refs_work(list[worker_id],
+                                                                 is_alive,
+                                                                 keep_alive,
+                                                                 do_enqueue_and_clear);
+    } else {
+      for (uint i = 0; i < _ref_processor.max_num_queues(); ++i) {
+        removed += _ref_processor.process_soft_weak_final_refs_work(list[i],
+                                                                    is_alive,
+                                                                    keep_alive,
+                                                                    do_enqueue_and_clear);
+      }
+    }
     _phase_times->add_ref_cleared(ref_type, removed);
   }
 
@@ -595,7 +615,13 @@ public:
                VoidClosure* complete_gc) override {
     ResourceMark rm;
     RefProcSubPhasesWorkerTimeTracker tt(ReferenceProcessor::FinalRefSubPhase3, _phase_times, worker_id);
-    _ref_processor.process_final_keep_alive_work(_ref_processor._discoveredFinalRefs[worker_id], keep_alive, complete_gc);
+    if (_ref_processor.processing_is_mt()) {
+      _ref_processor.process_final_keep_alive_work(_ref_processor._discoveredFinalRefs[worker_id], keep_alive, complete_gc);
+    } else {
+      for (uint i = 0; i < _ref_processor.max_num_queues(); ++i) {
+        _ref_processor.process_final_keep_alive_work(_ref_processor._discoveredFinalRefs[i], keep_alive, complete_gc);
+      }
+    }
   }
 };
 
@@ -612,10 +638,21 @@ public:
                VoidClosure* complete_gc) override {
     ResourceMark rm;
     RefProcSubPhasesWorkerTimeTracker tt(ReferenceProcessor::PhantomRefSubPhase4, _phase_times, worker_id);
-    size_t const removed = _ref_processor.process_phantom_refs_work(_ref_processor._discoveredPhantomRefs[worker_id],
-                                                                    is_alive,
-                                                                    keep_alive,
-                                                                    complete_gc);
+    size_t removed = 0;
+    if (_ref_processor.processing_is_mt()) {
+      removed = _ref_processor.process_phantom_refs_work(_ref_processor._discoveredPhantomRefs[worker_id],
+                                                         is_alive,
+                                                         keep_alive,
+                                                         complete_gc);
+
+    } else {
+      for (uint i = 0; i < _ref_processor.max_num_queues(); ++i) {
+        removed += _ref_processor.process_phantom_refs_work(_ref_processor._discoveredPhantomRefs[i],
+                                                            is_alive,
+                                                            keep_alive,
+                                                            complete_gc);
+      }
+    }
     _phase_times->add_ref_cleared(REF_PHANTOM, removed);
   }
 };
@@ -787,9 +824,7 @@ void ReferenceProcessor::run_task(RefProcTask& task, RefProcProxyTask& proxy_tas
            num_queues(), gang->active_workers());
     gang->run_task(&proxy_task, num_queues());
   } else {
-    for (unsigned i = 0; i < _max_num_queues; ++i) {
-      proxy_task.work(i);
-    }
+    proxy_task.work(0);
   }
 }
 

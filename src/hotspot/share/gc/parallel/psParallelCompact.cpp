@@ -2098,7 +2098,6 @@ void PSParallelCompact::marking_phase(ParCompactionManager* cm,
     ReferenceProcessorStats stats;
     ReferenceProcessorPhaseTimes pt(&_gc_timer, ref_processor()->max_num_queues());
 
-    ref_processor()->set_active_mt_degree(active_gc_threads);
     ParallelCompactRefProcProxyTask task(ref_processor()->max_num_queues());
     stats = ref_processor()->process_discovered_references(task, pt);
 

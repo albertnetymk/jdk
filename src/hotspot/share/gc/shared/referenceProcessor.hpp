@@ -164,6 +164,8 @@ class ReferenceProcessor : public ReferenceDiscoverer {
   friend class RefProcPhase2Task;
   friend class RefProcPhase3Task;
   friend class RefProcPhase4Task;
+
+  friend class RefProcMTDegreeAdjuster;
 public:
   // Names of sub-phases of reference processing. Indicates the type of the reference
   // processed and the associated phase number at the end.
@@ -291,12 +293,13 @@ private:
                                _always_clear_soft_ref_policy : _default_soft_ref_policy;
     _current_soft_ref_policy->setup();   // snapshot the policy threshold
   }
+
+  void set_active_mt_degree(uint v);
 public:
   static int number_of_subclasses_of_ref() { return (REF_PHANTOM - REF_OTHER); }
 
   uint num_queues() const                  { return _num_queues; }
   uint max_num_queues() const              { return _max_num_queues; }
-  void set_active_mt_degree(uint v);
 
   void start_discovery(bool always_clear) {
     enable_discovery();

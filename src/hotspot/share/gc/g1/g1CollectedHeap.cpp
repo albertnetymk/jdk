@@ -3293,7 +3293,6 @@ void G1CollectedHeap::process_discovered_references(G1ParScanThreadStateSet* per
          "Mismatch between the number of GC workers %u and the maximum number of Reference process queues %u",
          no_of_gc_workers,  rp->max_num_queues());
 
-  rp->set_active_mt_degree(no_of_gc_workers);
   G1STWRefProcProxyTask task(rp->max_num_queues(), *this, *per_thread_states, *_task_queues);
   stats = rp->process_discovered_references(task, pt);
 

@@ -1517,12 +1517,6 @@ void G1ConcurrentMark::weak_refs_work() {
     // executing the remark task.
     set_concurrency(active_workers);
 
-    // Set the degree of MT processing here.  If the discovery was done MT,
-    // the number of threads involved during discovery could differ from
-    // the number of active workers.  This is OK as long as the discovered
-    // Reference lists are balanced (see balance_all_queues() and balance_queues()).
-    rp->set_active_mt_degree(active_workers);
-
     // Parallel processing task executor.
     G1CMRefProcProxyTask task(rp->max_num_queues(), *_g1h, *this);
     ReferenceProcessorPhaseTimes pt(_gc_timer_cm, rp->max_num_queues());

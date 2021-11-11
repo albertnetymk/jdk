@@ -206,6 +206,29 @@ public:
   };
 
 private:
+
+  // Temporarily change the number of workers based on given reference count.
+  // This ergonomically decided worker count will be used to activate worker threads.
+  class RefProcMTDegreeAdjuster : public StackObj {
+    typedef ReferenceProcessor::RefProcPhases RefProcPhases;
+
+    ReferenceProcessor* _rp;
+    uint                _saved_num_queues;
+
+    // Calculate based on total of references.
+    uint ergo_proc_thread_count(size_t ref_count,
+                                uint max_threads,
+                                RefProcPhases phase) const;
+
+    bool use_max_threads(RefProcPhases phase) const;
+
+  public:
+    RefProcMTDegreeAdjuster(ReferenceProcessor* rp,
+                            RefProcPhases phase,
+                            size_t ref_count);
+    ~RefProcMTDegreeAdjuster();
+  };
+
   size_t total_count(DiscoveredList lists[]) const;
   void verify_total_count_zero(DiscoveredList lists[], const char* type) NOT_DEBUG_RETURN;
 
@@ -297,7 +320,6 @@ public:
 
   uint num_queues() const                  { return _num_queues; }
   uint max_num_queues() const              { return _max_num_queues; }
-  void set_active_mt_degree(uint v);
 
   void start_discovery(bool always_clear) {
     enable_discovery();
@@ -335,7 +357,7 @@ private:
                                    YieldClosure*      yield);
 
   // round-robin mod _num_queues (not: _not_ mod _max_num_queues)
-  uint next_id() {
+  uint round_robin_next_id() {
     uint id = _next_id;
     assert(!_discovery_is_mt, "Round robin should only be used in serial discovery");
     if (++_next_id == _num_queues) {
@@ -605,28 +627,6 @@ public:
   }
 
   virtual void prepare_run_task_hook() {}
-};
-
-// Temporarily change the number of workers based on given reference count.
-// This ergonomically decided worker count will be used to activate worker threads.
-class RefProcMTDegreeAdjuster : public StackObj {
-  typedef ReferenceProcessor::RefProcPhases RefProcPhases;
-
-  ReferenceProcessor* _rp;
-  uint                _saved_num_queues;
-
-  // Calculate based on total of references.
-  uint ergo_proc_thread_count(size_t ref_count,
-                              uint max_threads,
-                              RefProcPhases phase) const;
-
-  bool use_max_threads(RefProcPhases phase) const;
-
-public:
-  RefProcMTDegreeAdjuster(ReferenceProcessor* rp,
-                          RefProcPhases phase,
-                          size_t ref_count);
-  ~RefProcMTDegreeAdjuster();
 };
 
 #endif // SHARE_GC_SHARED_REFERENCEPROCESSOR_HPP

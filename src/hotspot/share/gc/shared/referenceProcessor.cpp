@@ -96,10 +96,11 @@ ReferenceProcessor::ReferenceProcessor(BoolObjectClosure* is_subject_to_discover
   _is_alive_non_header(is_alive_non_header)
 {
   assert(is_subject_to_discovery != NULL, "must be set");
+  assert(mt_processing_degree >= 1, "precondition");
 
   _discovery_is_concurrent = concurrent_discovery;
   _discovery_is_mt         = (mt_discovery_degree > 1);
-  _num_queues              = MAX2(1U, mt_processing_degree);
+  _num_queues              = ParallelRefProcEnabled ? mt_processing_degree : 1;
   _max_num_queues          = MAX2(_num_queues, mt_discovery_degree);
   _discovered_refs         = NEW_C_HEAP_ARRAY(DiscoveredList,
             _max_num_queues * number_of_subclasses_of_ref(), mtGC);
@@ -128,7 +129,7 @@ void ReferenceProcessor::verify_no_references_recorded() {
 #endif
 
 bool ReferenceProcessor::processing_is_mt() const {
-  return ParallelRefProcEnabled && _num_queues > 1;
+  return _num_queues > 1;
 }
 
 void ReferenceProcessor::weak_oops_do(OopClosure* f) {
@@ -580,12 +581,6 @@ void ReferenceProcessor::log_reflist_counts(DiscoveredList ref_lists[], uint num
 }
 #endif
 
-void ReferenceProcessor::set_active_mt_degree(uint v) {
-  assert(v <= max_num_queues(), "Mt degree %u too high, maximum %u", v,  max_num_queues());
-  _num_queues = v;
-  _next_id = 0;
-}
-
 bool ReferenceProcessor::need_balance_queues(DiscoveredList refs_lists[]) {
   assert(processing_is_mt(), "why balance non-mt processing?");
   // _num_queues is the processing degree.  Only list entries up to
@@ -817,7 +812,7 @@ void ReferenceProcessor::process_phantom_refs(RefProcProxyTask& proxy_task,
 }
 
 inline DiscoveredList* ReferenceProcessor::get_discovered_list(ReferenceType rt) {
-  uint id = 0;
+  uint id;
   // Determine the queue index to use for this object.
   if (_discovery_is_mt) {
     // During a multi-threaded discovery phase,
@@ -826,9 +821,7 @@ inline DiscoveredList* ReferenceProcessor::get_discovered_list(ReferenceType rt)
   } else {
     // single-threaded discovery, we save in round-robin
     // fashion to each of the lists.
-    if (processing_is_mt()) {
-      id = next_id();
-    }
+    id = round_robin_next_id();
   }
   assert(id < _max_num_queues, "Id is out of bounds id %u and max id %u)", id, _max_num_queues);
 
@@ -1183,9 +1176,9 @@ const char* ReferenceProcessor::list_name(uint i) {
    return NULL;
 }
 
-uint RefProcMTDegreeAdjuster::ergo_proc_thread_count(size_t ref_count,
-                                                     uint max_threads,
-                                                     RefProcPhases phase) const {
+uint ReferenceProcessor::RefProcMTDegreeAdjuster::ergo_proc_thread_count(size_t ref_count,
+                                                                         uint max_threads,
+                                                                         RefProcPhases phase) const {
   assert(0 < max_threads, "must allow at least one thread");
 
   if (use_max_threads(phase) || (ReferencesPerThread == 0)) {
@@ -1198,21 +1191,25 @@ uint RefProcMTDegreeAdjuster::ergo_proc_thread_count(size_t ref_count,
                     (size_t)os::active_processor_count());
 }
 
-bool RefProcMTDegreeAdjuster::use_max_threads(RefProcPhases phase) const {
+bool ReferenceProcessor::RefProcMTDegreeAdjuster::use_max_threads(RefProcPhases phase) const {
   // Even a small number of references in this phase could produce large amounts of work.
   return phase == ReferenceProcessor::KeepAliveFinalRefsPhase;
 }
 
-RefProcMTDegreeAdjuster::RefProcMTDegreeAdjuster(ReferenceProcessor* rp,
-                                                 RefProcPhases phase,
-                                                 size_t ref_count):
+ReferenceProcessor::RefProcMTDegreeAdjuster::RefProcMTDegreeAdjuster(ReferenceProcessor* rp,
+                                                                     RefProcPhases phase,
+                                                                     size_t ref_count):
     _rp(rp),
     _saved_num_queues(_rp->num_queues()) {
-  uint workers = ergo_proc_thread_count(ref_count, _rp->num_queues(), phase);
-  _rp->set_active_mt_degree(workers);
+  auto max_threads = (Universe::heap()->safepoint_workers() != nullptr)
+                   ? MIN2(_rp->num_queues(), Universe::heap()->safepoint_workers()->active_workers())
+                   : _rp->num_queues();
+  uint workers = ergo_proc_thread_count(ref_count, max_threads, phase);
+  assert(workers <= _rp->max_num_queues(), "invariant");
+  _rp->_num_queues = workers;
 }
 
-RefProcMTDegreeAdjuster::~RefProcMTDegreeAdjuster() {
+ReferenceProcessor::RefProcMTDegreeAdjuster::~RefProcMTDegreeAdjuster() {
   // Revert to previous status.
-  _rp->set_active_mt_degree(_saved_num_queues);
+  _rp->_num_queues = _saved_num_queues;
 }

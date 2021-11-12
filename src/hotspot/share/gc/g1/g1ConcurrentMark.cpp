@@ -1616,7 +1616,7 @@ void G1ConcurrentMark::weak_refs_work() {
     // otherwise we use the workers from the G1CollectedHeap and
     // we utilize all the worker threads we can.
     uint active_workers = (ParallelRefProcEnabled ? _g1h->workers()->active_workers() : 1U);
-    active_workers = clamp(active_workers, 1u, _max_num_tasks);
+    assert(1 <= active_workers && active_workers <= _max_num_tasks, "invariant: %d in [%d, %d]", active_workers, 1, _max_num_tasks);
 
     // Set the concurrency level. The phase was already set prior to
     // executing the remark task.

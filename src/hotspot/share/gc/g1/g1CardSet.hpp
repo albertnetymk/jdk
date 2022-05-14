@@ -299,6 +299,8 @@ public:
   G1CardSet(G1CardSetConfiguration* config, G1CardSetMemoryManager* mm);
   virtual ~G1CardSet();
 
+  uint num_elements_in_container(ContainerPtr container);
+
   // Adds the given card to this set, returning an appropriate result.
   // If incremental_count is true and the card has been added, updates the total count.
   G1AddCardResult add_card(uint card_region, uint card_in_region, bool increment_total = true);
@@ -350,7 +352,7 @@ public:
 
   class ContainerPtrClosure {
   public:
-    virtual void do_containerptr(uint region_idx, size_t num_occupied, ContainerPtr container) = 0;
+    virtual void do_containerptr(uint region_idx, ContainerPtr container) = 0;
   };
 
   void iterate_containers(ContainerPtrClosure* cl, bool safepoint = false);
@@ -368,10 +370,9 @@ public:
   using ContainerPtr = G1CardSet::ContainerPtr;
 
   const uint _region_idx;
-  uint volatile _num_occupied;
   ContainerPtr volatile _container;
 
-  G1CardSetHashTableValue(uint region_idx, ContainerPtr container) : _region_idx(region_idx), _num_occupied(0), _container(container) { }
+  G1CardSetHashTableValue(uint region_idx, ContainerPtr container) : _region_idx(region_idx), _container(container) { }
 };
 
 class G1CardSetHashTableConfig : public StackObj {

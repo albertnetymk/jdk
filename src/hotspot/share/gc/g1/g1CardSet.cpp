@@ -230,7 +230,7 @@ class G1CardSetHashTable : public CHeapObj<mtGCCardSet> {
     explicit G1CardSetHashTableScan(G1CardSet::ContainerPtrClosure* f) : _scan_f(f) { }
 
     bool operator()(G1CardSetHashTableValue* value) {
-      _scan_f->do_containerptr(value->_region_idx, value->_num_occupied, value->_container);
+      _scan_f->do_containerptr(value->_region_idx, value->_container);
       return true;
     }
   };
@@ -592,7 +592,8 @@ void G1CardSet::transfer_cards(G1CardSetHashTableValue* table_entry, ContainerPt
     assert(container_type(source_container) == ContainerHowl, "must be");
     // Need to correct for that the Full remembered set occupies more cards than the
     // AoCS before.
-    Atomic::add(&_num_occupied, _config->max_cards_in_region() - table_entry->_num_occupied, memory_order_relaxed);
+    uint diff = _config->max_cards_in_region() - container_ptr<G1CardSetHowl>(source_container)->_num_entries;
+    Atomic::add(&_num_occupied, diff, memory_order_relaxed);
   }
 }
 
@@ -619,14 +620,31 @@ void G1CardSet::transfer_cards_in_howl(ContainerPtr parent_container,
 
     G1CardSetHowl* howling_array = container_ptr<G1CardSetHowl>(parent_container);
     Atomic::add(&howling_array->_num_entries, diff, memory_order_relaxed);
-
-    G1CardSetHashTableValue* table_entry = get_container(card_region);
-    assert(table_entry != nullptr, "Table entry not found for transferred cards");
-
-    Atomic::add(&table_entry->_num_occupied, diff, memory_order_relaxed);
-
     Atomic::add(&_num_occupied, diff, memory_order_relaxed);
   }
+}
+
+uint G1CardSet::num_elements_in_container(ContainerPtr container) {
+  switch (container_type(container)) {
+    case ContainerInlinePtr: {
+      return G1CardSetInlinePtr::num_cards_in(container);
+    }
+    case ContainerArrayOfCards: {
+      return container_ptr<G1CardSetArray>(container)->num_entries();
+    }
+    case ContainerBitMap: {
+      return container_ptr<G1CardSetBitMap>(container)->num_bits_set();
+    }
+    case ContainerHowl: {
+      if (container == FullCardSet) {
+        // All cards covered by this container should be counted
+        return 1u << config()->log2_cards_per_card_region();
+      }
+      return container_ptr<G1CardSetHowl>(container)->_num_entries;
+    }
+  }
+  ShouldNotReachHere();
+  return 0;
 }
 
 G1AddCardResult G1CardSet::add_to_container(ContainerPtr volatile* container_addr,
@@ -701,7 +719,6 @@ G1AddCardResult G1CardSet::add_card(uint card_region, uint card_in_region, bool 
   }
 
   if (increment_total && add_result == Added) {
-    Atomic::inc(&table_entry->_num_occupied, memory_order_relaxed);
     Atomic::inc(&_num_occupied, memory_order_relaxed);
   }
   if (should_grow_table) {
@@ -848,7 +865,7 @@ public:
     _card_set(card_set),
     _cl(cl) { }
 
-  void do_containerptr(uint region_idx, size_t num_occupied, G1CardSet::ContainerPtr container) override {
+  void do_containerptr(uint region_idx, G1CardSet::ContainerPtr container) override {
     CardOrRanges<Closure> cl(_cl, region_idx);
     _card_set->iterate_cards_or_ranges_in_container(container, cl);
   }
@@ -878,7 +895,7 @@ size_t G1CardSet::num_containers() {
 
     GetNumberOfContainers() : ContainerPtrClosure(), _count(0) { }
 
-    void do_containerptr(uint region_idx, size_t num_occupied, ContainerPtr container) override {
+    void do_containerptr(uint region_idx, ContainerPtr container) override {
       _count++;
     }
   } cl;

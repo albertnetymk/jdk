@@ -98,7 +98,7 @@ public:
     _log_card_region_size(log_card_region_size) {
   }
 
-  void do_containerptr(uint card_region_idx, size_t num_occupied, G1CardSet::ContainerPtr container) override {
+  void do_containerptr(uint card_region_idx, G1CardSet::ContainerPtr container) override {
     CardOrRanges<Closure> cl(_cl,
                              card_region_idx >> _log_card_regions_per_region,
                              (card_region_idx & _card_regions_per_region_mask) << _log_card_region_size);

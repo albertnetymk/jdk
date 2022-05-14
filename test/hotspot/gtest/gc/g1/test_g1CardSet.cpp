@@ -166,13 +166,14 @@ void G1CardSetTest::translate_cards(uint cards_per_region, uint region_idx, uint
 }
 
 class G1CountCardsOccupied : public G1CardSet::ContainerPtrClosure {
+  G1CardSet* _card_set;
   size_t _num_occupied;
 
 public:
-  G1CountCardsOccupied() : _num_occupied(0) { }
+  G1CountCardsOccupied(G1CardSet* card_set) : _card_set(card_set), _num_occupied(0) { }
 
-  void do_containerptr(uint region_idx, size_t num_occupied, G1CardSet::ContainerPtr container) override {
-    _num_occupied += num_occupied;
+  void do_containerptr(uint region_idx, G1CardSet::ContainerPtr container) override {
+    _num_occupied += _card_set->num_elements_in_container(container);
   }
 
   size_t num_occupied() const { return _num_occupied; }
@@ -321,7 +322,7 @@ void G1CardSetTest::cardset_basic_test() {
       }
     }
 
-    G1CountCardsOccupied cl;
+    G1CountCardsOccupied cl(&card_set);
     card_set.iterate_containers(&cl);
 
     ASSERT_TRUE(count == card_set.occupied());

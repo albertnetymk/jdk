@@ -76,8 +76,6 @@ private:
 
   void assert_scan_top_is_null(uint hrm_index) NOT_DEBUG_RETURN;
 
-  void enqueue_for_reprocessing(CardValue* card_ptr);
-
 public:
   // Initialize data that depends on the heap size being known.
   void initialize(uint max_reserved_regions);

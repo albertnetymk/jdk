@@ -346,10 +346,7 @@ HeapWord* HeapRegion::do_oops_on_memregion_in_humongous(MemRegion mr,
 
   // If concurrent and klass_or_null is NULL, then space has been
   // allocated but the object has not yet been published by setting
-  // the klass.  That can only happen if the card is stale.  However,
-  // we've already set the card clean, so we must return failure,
-  // since the allocating thread could have performed a write to the
-  // card that might be missed otherwise.
+  // the klass. This card is stale; just early return.
   if (!in_gc_pause && (obj->klass_or_null_acquire() == NULL)) {
     return NULL;
   }

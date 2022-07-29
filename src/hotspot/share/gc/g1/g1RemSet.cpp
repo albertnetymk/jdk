@@ -1734,44 +1734,7 @@ void G1RemSet::refine_card_concurrently(CardValue* const card_ptr,
   assert(!dirty_region.is_empty(), "sanity");
 
   G1ConcurrentRefineOopClosure conc_refine_cl(_g1h, worker_id);
-  if (r->oops_on_memregion_seq_iterate_careful<false>(dirty_region, &conc_refine_cl) != NULL) {
-    return;
-  }
-
-  // If unable to process the card then we encountered an unparsable
-  // part of the heap (e.g. a partially allocated object, so only
-  // temporarily a problem) while processing a stale card.  Despite
-  // the card being stale, we can't simply ignore it, because we've
-  // already marked the card cleaned, so taken responsibility for
-  // ensuring the card gets scanned.
-  //
-  // However, the card might have gotten re-dirtied and re-enqueued
-  // while we worked.  (In fact, it's pretty likely.)
-  if (*card_ptr == G1CardTable::dirty_card_val()) {
-    return;
-  }
-
-  enqueue_for_reprocessing(card_ptr);
-}
-
-// Re-dirty and re-enqueue the card to retry refinement later.
-// This is used to deal with a rare race condition in concurrent refinement.
-void G1RemSet::enqueue_for_reprocessing(CardValue* card_ptr) {
-  // We can't use the thread-local queue, because that might be the queue
-  // that is being processed by us; we could be a Java thread conscripted to
-  // perform refinement on our queue's current buffer.  This situation only
-  // arises from rare race condition, so it's not worth any significant
-  // development effort or clever lock-free queue implementation.  Instead
-  // we use brute force, allocating and enqueuing an entire buffer for just
-  // this card.  Since buffers are processed in FIFO order and we try to
-  // keep some in the queue, it is likely that the racing state will have
-  // resolved by the time this card comes up for reprocessing.
-  *card_ptr = G1CardTable::dirty_card_val();
-  G1DirtyCardQueueSet& dcqs = G1BarrierSet::dirty_card_queue_set();
-  void** buffer = dcqs.allocate_buffer();
-  size_t index = dcqs.buffer_size() - 1;
-  buffer[index] = card_ptr;
-  dcqs.enqueue_completed_buffer(BufferNode::make_node_from_buffer(buffer, index));
+  r->oops_on_memregion_seq_iterate_careful<false>(dirty_region, &conc_refine_cl);
 }
 
 void G1RemSet::print_periodic_summary_info(const char* header, uint period_count, bool show_thread_times) {

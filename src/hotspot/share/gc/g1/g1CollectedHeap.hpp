@@ -216,6 +216,8 @@ private:
 public:
   size_t bytes_used_during_gc() const { return _bytes_used_during_gc; }
 
+  HeapRegionManager* hrm() { return &_hrm; }
+
 private:
   // Class that handles archive allocation ranges.
   G1ArchiveAllocator* _archive_allocator;

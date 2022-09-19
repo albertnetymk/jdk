@@ -83,4 +83,26 @@ inline HeapRegion* HeapRegionManager::allocate_free_regions_starting_at(uint fir
   return start;
 }
 
+inline bool HeapRegionIterator::next(uint* region_index) {
+  while (_index < _hrm->reserved_length()) {
+    uint cur_index = _index;
+    _index++;
+    if (_hrm->is_available(cur_index)) {
+      *region_index = cur_index;
+      return true;
+    }
+  }
+
+  return false;
+}
+
+inline bool HeapRegionIterator::next(uint* region_index, HeapRegion** r) {
+  if (next(region_index)) {
+    *r = _hrm->at(*region_index);
+    return true;
+  }
+
+  return false;
+}
+
 #endif // SHARE_GC_G1_HEAPREGIONMANAGER_INLINE_HPP

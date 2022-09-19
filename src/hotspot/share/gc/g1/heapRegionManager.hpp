@@ -296,6 +296,18 @@ public:
   void verify_optional() PRODUCT_RETURN;
 };
 
+class HeapRegionIterator : public StackObj {
+  uint _index;
+  HeapRegionManager* _hrm;
+ public:
+  HeapRegionIterator(HeapRegionManager* hrm) :
+    _index(0),
+    _hrm(hrm) {}
+
+  inline bool next(uint* region_index);
+  inline bool next(uint* region_index, HeapRegion** r);
+};
+
 // The HeapRegionClaimer is used during parallel iteration over heap regions,
 // allowing workers to claim heap regions, gaining exclusive rights to these regions.
 class HeapRegionClaimer : public StackObj {

@@ -83,12 +83,10 @@ void G1CollectionSetCandidates::verify() const {
   for (; idx < _num_regions; idx++) {
     HeapRegion *cur = _regions[idx];
     guarantee(cur != NULL, "Regions after _front_idx %u cannot be NULL but %u is", _front_idx, idx);
-    // The first disjunction filters out regions with objects that were explicitly
-    // pinned after being added to the collection set candidates. Archive regions
-    // should never have been added to the collection set though.
-    guarantee((cur->is_pinned() && !cur->is_archive()) ||
-              G1CollectionSetChooser::should_add(cur),
-              "Region %u should be eligible for addition.", cur->hrm_index());
+    guarantee(!cur->is_pinned(), "region-pinning not supported yet");
+    guarantee(cur->is_old()
+           && cur->rem_set()->is_complete()
+           && G1CollectionSetChooser::region_occupancy_low_enough_for_evac(cur->live_bytes()), "invariant");
     if (prev != NULL) {
       guarantee(prev->gc_efficiency() >= cur->gc_efficiency(),
                 "GC efficiency for region %u: %1.4f smaller than for region %u: %1.4f",

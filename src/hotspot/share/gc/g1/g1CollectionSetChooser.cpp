@@ -171,8 +171,6 @@ class G1BuildCandidateRegionsTask : public WorkerTask {
       _reclaimable_bytes_added += hr->reclaimable_bytes();
     }
 
-    bool should_add(HeapRegion* hr) { return G1CollectionSetChooser::should_add(hr); }
-
   public:
     G1BuildCandidateRegionsClosure(G1BuildCandidateArray* array) :
       _array(array),
@@ -182,20 +180,20 @@ class G1BuildCandidateRegionsTask : public WorkerTask {
       _reclaimable_bytes_added(0) { }
 
     bool do_heap_region(HeapRegion* r) {
-      // We will skip any region that's currently used as an old GC
-      // alloc region (we should not consider those for collection
-      // before we fill them up).
-      if (should_add(r) && !G1CollectedHeap::heap()->is_old_gc_alloc_region(r)) {
-        add_region(r);
-      } else if (r->is_old()) {
-        // Keep remembered sets for humongous regions, otherwise clean out remembered
-        // sets for old regions.
-        r->rem_set()->clear(true /* only_cardset */);
-      } else {
-        assert(r->is_archive() || !r->is_old() || !r->rem_set()->is_tracked(),
-               "Missed to clear unused remembered set of region %u (%s) that is %s",
-               r->hrm_index(), r->get_type_str(), r->rem_set()->get_state_str());
+      if (r->is_old()) {
+        assert(!r->is_pinned(), "region-pinning not supported yet");
+        // We will skip any region that's currently used as an old GC
+        // alloc region (we should not consider those for collection
+        // before we fill them up).
+        if(  !G1CollectedHeap::heap()->is_old_gc_alloc_region(r)
+          && r->rem_set()->is_complete()
+          && G1CollectionSetChooser::region_occupancy_low_enough_for_evac(r->live_bytes())) {
+          add_region(r);
+        } else {
+          r->rem_set()->clear(true /* only_cardset */);
+        }
       }
+
       return false;
     }
 
@@ -248,13 +246,6 @@ public:
 uint G1CollectionSetChooser::calculate_work_chunk_size(uint num_workers, uint num_regions) {
   assert(num_workers > 0, "Active gc workers should be greater than 0");
   return MAX2(num_regions / num_workers, 1U);
-}
-
-bool G1CollectionSetChooser::should_add(HeapRegion* hr) {
-  return !hr->is_young() &&
-         !hr->is_pinned() &&
-         region_occupancy_low_enough_for_evac(hr->live_bytes()) &&
-         hr->rem_set()->is_complete();
 }
 
 // Closure implementing early pruning (removal) of regions meeting the

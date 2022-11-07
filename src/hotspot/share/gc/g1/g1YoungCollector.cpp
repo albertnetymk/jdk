@@ -1072,6 +1072,7 @@ void G1YoungCollector::collect() {
     // policy for the collection deliberately elides verification (and some
     // other trivial setup above).
     policy()->record_young_collection_start();
+    phase_times()->record_collection_start_tick();
 
     calculate_collection_set(jtm.evacuation_info(), policy()->max_pause_time_ms());
 
@@ -1087,13 +1088,19 @@ void G1YoungCollector::collect() {
 
     pre_evacuate_collection_set(jtm.evacuation_info(), &per_thread_states);
 
+    phase_times()->record_pre_evacuate_end_tick();
+
     bool may_do_optional_evacuation = collection_set()->optional_region_length() != 0;
     // Actually do the work...
     evacuate_initial_collection_set(&per_thread_states, may_do_optional_evacuation);
 
+    phase_times()->record_initial_evacuate_end_tick();
+
     if (may_do_optional_evacuation) {
       evacuate_optional_collection_set(&per_thread_states);
     }
+    phase_times()->record_optional_evacuate_end_tick();
+
     post_evacuate_collection_set(jtm.evacuation_info(), &per_thread_states);
 
     // Refine the type of a concurrent mark operation now that we did the
@@ -1103,6 +1110,8 @@ void G1YoungCollector::collect() {
     // Need to report the collection pause now since record_collection_pause_end()
     // modifies it to the next state.
     jtm.report_pause_type(collector_state()->young_gc_pause_type(_concurrent_operation_is_full_mark));
+
+    phase_times()->record_collection_end_tick();
 
     policy()->record_young_collection_end(_concurrent_operation_is_full_mark, evacuation_failed());
   }

@@ -382,7 +382,23 @@ void G1GCPhaseTimes::trace_count(const char* name, size_t value) const {
   log_trace(gc, phases)("      %s: " SIZE_FORMAT, name, value);
 }
 
-double G1GCPhaseTimes::print_pre_evacuate_collection_set() const {
+void G1GCPhaseTimes::print_pre_evacuate_collection_set() const {
+  double pre_evacuate_time_ms = (_recorded_pre_evacuate_end_tick - _recorded_collection_start_tick).seconds() * MILLIUNITS;
+
+  info_time("Pre Evacuate Collection Set", pre_evacuate_time_ms);
+
+  debug_time("Prepare TLABs", _cur_prepare_tlab_time_ms);
+  debug_time("Concatenate Dirty Card Logs", _cur_concatenate_dirty_card_logs_time_ms);
+  debug_time("Choose Collection Set", (_recorded_young_cset_choice_time_ms + _recorded_non_young_cset_choice_time_ms));
+  debug_time("Region Register", _cur_region_register_time);
+
+  debug_time("Prepare Heap Roots", _recorded_prepare_heap_roots_time_ms);
+
+  if (G1CollectedHeap::heap()->collector_state()->in_concurrent_start_gc()) {
+    debug_phase(_gc_par_phases[ResetMarkingState]);
+    debug_phase(_gc_par_phases[NoteStartOfMark]);
+  }
+
   const double pre_concurrent_start_ms = average_time_ms(ResetMarkingState) +
                                          average_time_ms(NoteStartOfMark);
 
@@ -395,44 +411,11 @@ double G1GCPhaseTimes::print_pre_evacuate_collection_set() const {
                         _recorded_prepare_heap_roots_time_ms +
                         pre_concurrent_start_ms;
 
-  info_time("Pre Evacuate Collection Set", sum_ms);
 
-  if (_root_region_scan_wait_time_ms > 0.0) {
-    debug_time("Root Region Scan Waiting", _root_region_scan_wait_time_ms);
-  }
-  debug_time("Prepare TLABs", _cur_prepare_tlab_time_ms);
-  debug_time("Concatenate Dirty Card Logs", _cur_concatenate_dirty_card_logs_time_ms);
-  debug_time("Choose Collection Set", (_recorded_young_cset_choice_time_ms + _recorded_non_young_cset_choice_time_ms));
-  debug_time("Region Register", _cur_region_register_time);
-
-  debug_time("Prepare Heap Roots", _recorded_prepare_heap_roots_time_ms);
-
-  if (pre_concurrent_start_ms > 0.0) {
-    debug_phase(_gc_par_phases[ResetMarkingState]);
-    debug_phase(_gc_par_phases[NoteStartOfMark]);
-  }
-
-  return sum_ms;
+  debug_time("Other", pre_evacuate_time_ms - sum_ms);
 }
 
-double G1GCPhaseTimes::print_evacuate_optional_collection_set() const {
-  const double sum_ms = _cur_optional_evac_time_ms + _cur_optional_merge_heap_roots_time_ms;
-  if (sum_ms > 0) {
-    info_time("Merge Optional Heap Roots", _cur_optional_merge_heap_roots_time_ms);
-
-    debug_time("Prepare Optional Merge Heap Roots", _cur_optional_prepare_merge_heap_roots_time_ms);
-    debug_phase(_gc_par_phases[OptMergeRS]);
-
-    info_time("Evacuate Optional Collection Set", _cur_optional_evac_time_ms);
-    debug_phase(_gc_par_phases[OptScanHR]);
-    debug_phase(_gc_par_phases[OptObjCopy]);
-    debug_phase(_gc_par_phases[OptCodeRoots]);
-    debug_phase(_gc_par_phases[OptTermination]);
-  }
-  return sum_ms;
-}
-
-double G1GCPhaseTimes::print_evacuate_initial_collection_set() const {
+void G1GCPhaseTimes::print_evacuate_initial_collection_set() const {
   info_time("Merge Heap Roots", _cur_merge_heap_roots_time_ms);
 
   debug_time("Prepare Merge Heap Roots", _cur_prepare_merge_heap_roots_time_ms);
@@ -458,21 +441,41 @@ double G1GCPhaseTimes::print_evacuate_initial_collection_set() const {
   debug_phase(_gc_par_phases[GCWorkerTotal]);
   trace_phase(_gc_par_phases[GCWorkerEnd], false);
 
-  return _cur_collection_initial_evac_time_ms + _cur_merge_heap_roots_time_ms;
+  const double initial_evac_time_ms =
+    (_recorded_initial_evacuate_end_tick - _recorded_pre_evacuate_end_tick).seconds() * MILLIUNITS;
+
+  const double sum_ms = _cur_merge_heap_roots_time_ms + _cur_collection_initial_evac_time_ms;
+
+  debug_time("Other", initial_evac_time_ms - sum_ms);
 }
 
-double G1GCPhaseTimes::print_post_evacuate_collection_set(bool evacuation_failed) const {
-  const double sum_ms = _cur_collection_nmethod_list_cleanup_time_ms +
-                        _recorded_preserve_cm_referents_time_ms +
-                        _cur_ref_proc_time_ms +
-                        (_weak_phase_times.total_time_sec() * MILLIUNITS) +
-                        _cur_post_evacuate_cleanup_1_time_ms +
-                        _cur_post_evacuate_cleanup_2_time_ms +
-                        _recorded_total_rebuild_freelist_time_ms +
-                        _recorded_start_new_cset_time_ms +
-                        _cur_expand_heap_time_ms;
+void G1GCPhaseTimes::print_evacuate_optional_collection_set() const {
+  const double optional_evac_time_ms =
+    (_recorded_optional_evacuate_end_tick - _recorded_initial_evacuate_end_tick).seconds() * MILLIUNITS;
 
-  info_time("Post Evacuate Collection Set", sum_ms);
+  if (optional_evac_time_ms >= 0.1) {
+    info_time("Merge Optional Heap Roots", optional_evac_time_ms);
+
+    debug_time("Prepare Optional Merge Heap Roots", _cur_optional_prepare_merge_heap_roots_time_ms);
+    debug_phase(_gc_par_phases[OptMergeRS]);
+
+    info_time("Evacuate Optional Collection Set", _cur_optional_evac_time_ms);
+    debug_phase(_gc_par_phases[OptScanHR]);
+    debug_phase(_gc_par_phases[OptObjCopy]);
+    debug_phase(_gc_par_phases[OptCodeRoots]);
+    debug_phase(_gc_par_phases[OptTermination]);
+
+    const double sum_ms = _cur_optional_evac_time_ms + _cur_optional_merge_heap_roots_time_ms;
+
+    debug_time("Other", optional_evac_time_ms - sum_ms);
+  }
+}
+
+void G1GCPhaseTimes::print_post_evacuate_collection_set(bool evacuation_failed) const {
+  const double post_evac_time_ms =
+    (_recorded_collection_end_tick - _recorded_optional_evacuate_end_tick).seconds() * MILLIUNITS;
+
+  info_time("Post Evacuate Collection Set", post_evac_time_ms);
 
   debug_time("NMethod List Cleanup", _cur_collection_nmethod_list_cleanup_time_ms);
 
@@ -524,14 +527,25 @@ double G1GCPhaseTimes::print_post_evacuate_collection_set(bool evacuation_failed
   }
   debug_time("Expand Heap After Collection", _cur_expand_heap_time_ms);
 
-  return sum_ms;
-}
 
-void G1GCPhaseTimes::print_other(double accounted_ms) const {
-  info_time("Other", _gc_pause_time_ms - accounted_ms);
+  const double sum_ms = _cur_collection_nmethod_list_cleanup_time_ms +
+                        _recorded_preserve_cm_referents_time_ms +
+                        _cur_ref_proc_time_ms +
+                        (_weak_phase_times.total_time_sec() * MILLIUNITS) +
+                        _cur_post_evacuate_cleanup_1_time_ms +
+                        _cur_post_evacuate_cleanup_2_time_ms +
+                        _recorded_total_rebuild_freelist_time_ms +
+                        _recorded_start_new_cset_time_ms +
+                        _cur_expand_heap_time_ms;
+
+  debug_time("Other", post_evac_time_ms - sum_ms);
 }
 
 void G1GCPhaseTimes::print(bool evacuation_failed) {
+  if (_root_region_scan_wait_time_ms > 0.0) {
+    debug_time("Root Region Scan Waiting", _root_region_scan_wait_time_ms);
+  }
+
   // Check if some time has been recorded for verification and only then print
   // the message. We do not use Verify*GC here to print because VerifyGCType
   // further limits actual verification.
@@ -539,12 +553,10 @@ void G1GCPhaseTimes::print(bool evacuation_failed) {
     debug_time("Verify Before", _cur_verify_before_time_ms);
   }
 
-  double accounted_ms = 0.0;
-  accounted_ms += print_pre_evacuate_collection_set();
-  accounted_ms += print_evacuate_initial_collection_set();
-  accounted_ms += print_evacuate_optional_collection_set();
-  accounted_ms += print_post_evacuate_collection_set(evacuation_failed);
-  print_other(accounted_ms);
+  print_pre_evacuate_collection_set();
+  print_evacuate_initial_collection_set();
+  print_evacuate_optional_collection_set();
+  print_post_evacuate_collection_set(evacuation_failed);
 
   // See above comment on the _cur_verify_before_time_ms check.
   if (_cur_verify_after_time_ms > 0.0) {

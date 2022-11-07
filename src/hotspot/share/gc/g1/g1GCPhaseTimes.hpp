@@ -195,6 +195,16 @@ class G1GCPhaseTimes : public CHeapObj<mtGC> {
 
   double _external_accounted_time_ms;
 
+  Ticks _recorded_collection_start_tick;
+
+  Ticks _recorded_pre_evacuate_end_tick;
+
+  Ticks _recorded_initial_evacuate_end_tick;
+
+  Ticks _recorded_optional_evacuate_end_tick;
+
+  Ticks _recorded_collection_end_tick;
+
   double _recorded_prepare_heap_roots_time_ms;
 
   double _recorded_young_cset_choice_time_ms;
@@ -237,12 +247,10 @@ class G1GCPhaseTimes : public CHeapObj<mtGC> {
   void trace_time(const char* name, double value) const;
   void trace_count(const char* name, size_t value) const;
 
-  double print_pre_evacuate_collection_set() const;
-  double print_merge_heap_roots_time() const;
-  double print_evacuate_initial_collection_set() const;
-  double print_evacuate_optional_collection_set() const;
-  double print_post_evacuate_collection_set(bool evacuation_failed) const;
-  void print_other(double accounted_ms) const;
+  void print_pre_evacuate_collection_set() const;
+  void print_evacuate_initial_collection_set() const;
+  void print_evacuate_optional_collection_set() const;
+  void print_post_evacuate_collection_set(bool evacuation_failed) const;
 
  public:
   G1GCPhaseTimes(STWGCTimer* gc_timer, uint max_gc_threads);
@@ -378,6 +386,26 @@ class G1GCPhaseTimes : public CHeapObj<mtGC> {
 
   void inc_external_accounted_time_ms(double time_ms) {
     _external_accounted_time_ms += time_ms;
+  }
+
+  void record_collection_start_tick() {
+    _recorded_collection_start_tick = Ticks::now();
+  }
+
+  void record_pre_evacuate_end_tick() {
+    _recorded_pre_evacuate_end_tick = Ticks::now();
+  }
+
+  void record_initial_evacuate_end_tick() {
+    _recorded_initial_evacuate_end_tick = Ticks::now();
+  }
+
+  void record_optional_evacuate_end_tick() {
+    _recorded_optional_evacuate_end_tick = Ticks::now();
+  }
+
+  void record_collection_end_tick() {
+    _recorded_collection_end_tick = Ticks::now();
   }
 
   void record_prepare_heap_roots_time_ms(double recorded_prepare_heap_roots_time_ms) {

@@ -1028,9 +1028,6 @@ void G1CollectedHeap::prepare_heap_for_mutators() {
   // Purge code root memory
   purge_code_root_memory();
 
-  // Start a new incremental collection set for the next pause
-  start_new_collection_set();
-
   _allocator->init_mutator_alloc_regions();
 
   // Post collection state updates.
@@ -3008,7 +3005,6 @@ void G1CollectedHeap::abandon_collection_set(G1CollectionSet* collection_set) {
   collection_set_iterate_all(&cl);
 
   collection_set->clear();
-  collection_set->stop_incremental_building();
 }
 
 bool G1CollectedHeap::is_old_gc_alloc_region(HeapRegion* hr) {

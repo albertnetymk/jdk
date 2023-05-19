@@ -946,15 +946,24 @@ bool ReferenceProcessor::discover_reference(oop obj, ReferenceType rt) {
     return false;
   }
 
-  // We only discover references whose referents are not (yet)
-  // known to be strongly reachable.
-  if (is_alive_non_header() != nullptr) {
-    verify_referent(obj);
+  {
+    // Check referent
     oop referent = java_lang_ref_Reference::unknown_referent_no_keepalive(obj);
-    if (is_alive_non_header()->do_object_b(referent)) {
-      return false;  // referent is reachable
+    if (discovery_is_concurrent()) {
+      assert(UseG1GC, "Currently used by G1 only");
+      assert(is_alive_non_header() != nullptr, "inv");
+      if (referent == nullptr || is_alive_non_header()->do_object_b(referent)) {
+        return false;
+      }
+    } else {
+      assert(referent != nullptr, "inv");
+      if (!is_subject_to_discovery(referent)) {
+        // Outside young-gen (or collection set), treat as live
+        return false;
+      }
     }
   }
+
   if (rt == REF_SOFT) {
     // For soft refs we can decide now if these are not
     // current candidates for clearing, in which case we

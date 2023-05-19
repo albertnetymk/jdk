@@ -41,13 +41,6 @@
 #include "utilities/bitMap.inline.hpp"
 
 inline bool G1CMIsAliveClosure::do_object_b(oop obj) {
-  // Check whether the passed in object is null. During discovery the referent
-  // may be cleared between the initial check and being passed in here.
-  if (obj == nullptr) {
-    // Return true to avoid discovery when the referent is null.
-    return true;
-  }
-
   HeapRegion* hr = _g1h->heap_region_containing(obj);
   // All objects allocated since the start of marking are considered live.
   if (hr->obj_allocated_since_marking_start(obj)) {

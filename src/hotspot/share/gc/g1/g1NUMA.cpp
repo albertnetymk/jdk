@@ -99,11 +99,11 @@ void G1NUMA::initialize(bool use_numa) {
 
   // Create an array of active node ids.
   _node_ids = NEW_C_HEAP_ARRAY(int, num_node_ids, mtGC);
-  _num_active_node_ids = (uint)os::numa_get_leaf_groups(_node_ids, num_node_ids);
+  _num_active_node_ids = checked_cast<uint>(os::numa_get_leaf_groups(_node_ids, num_node_ids));
 
-  int max_node_id = 0;
+  uint max_node_id = 0;
   for (uint i = 0; i < _num_active_node_ids; i++) {
-    max_node_id = MAX2(max_node_id, _node_ids[i]);
+    max_node_id = MAX2(max_node_id, checked_cast<uint>(_node_ids[i]));
   }
 
   // Create a mapping between node_id and index.
@@ -111,7 +111,7 @@ void G1NUMA::initialize(bool use_numa) {
   _node_id_to_index_map = NEW_C_HEAP_ARRAY(uint, _len_node_id_to_index_map, mtGC);
 
   // Set all indices with unknown node id.
-  for (int i = 0; i < _len_node_id_to_index_map; i++) {
+  for (uint i = 0; i < _len_node_id_to_index_map; i++) {
     _node_id_to_index_map[i] = G1NUMA::UnknownNodeIndex;
   }
 
@@ -159,10 +159,10 @@ uint G1NUMA::preferred_node_index_for_index(uint region_index) const {
   }
 }
 
-int G1NUMA::numa_id(int index) const {
+uint G1NUMA::numa_id(uint index) const {
   assert(index < _len_node_id_to_index_map, "Index %d out of range: [0,%d)",
          index, _len_node_id_to_index_map);
-  return _node_ids[index];
+  return checked_cast<uint>(_node_ids[index]);
 }
 
 uint G1NUMA::index_of_address(HeapWord *address) const {

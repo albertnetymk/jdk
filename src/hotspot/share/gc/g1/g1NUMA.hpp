@@ -39,9 +39,10 @@ class G1NUMA: public CHeapObj<mtGC> {
   // For invalid node id, return UnknownNodeIndex.
   uint* _node_id_to_index_map;
   // Length of _num_active_node_ids_id to index map.
-  int _len_node_id_to_index_map;
+  uint _len_node_id_to_index_map;
 
-  // Current active node ids.
+  // Current active node ids. This would have been an array of uint, but
+  // os::numa_get_leaf_groups expects an array of int.
   int* _node_ids;
   // Total number of node ids.
   uint _num_active_node_ids;
@@ -86,7 +87,7 @@ public:
 
   bool is_enabled() const;
 
-  int numa_id(int index) const;
+  uint numa_id(uint index) const;
 
   // Returns memory node ids
   const int* node_ids() const;

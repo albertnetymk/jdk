@@ -170,9 +170,9 @@ ZDriverRequest rule_minor_allocation_rate_dynamic(const ZDirectorStats& stats,
   const double alloc_rate_avg = alloc_rate_stats._avg;
   const double alloc_rate_sd = alloc_rate_stats._sd;
   const double alloc_rate_sd_percent = alloc_rate_sd / (alloc_rate_avg + 1.0);
-  const double alloc_rate_conservative = (MAX2(alloc_rate_predict, alloc_rate_avg) * ZAllocationSpikeTolerance) + (alloc_rate_sd * one_in_1000) + 1.0;
-  const double alloc_rate = conservative_alloc_rate ? alloc_rate_conservative : alloc_rate_stats._avg;
-  const double time_until_oom = (free / alloc_rate) / (1.0 + alloc_rate_sd_percent);
+  const double alloc_rate = conservative_alloc_rate ? (MAX2(alloc_rate_predict, alloc_rate_avg) * ZAllocationSpikeTolerance) + (alloc_rate_sd * one_in_1000)
+                                                    : alloc_rate_stats._avg + alloc_rate_sd;
+  const double time_until_oom = free / (alloc_rate + 1.0); // Plus 1.0B/s to avoid division by zero
 
   // Calculate max serial/parallel times of a GC cycle. The times are
   // moving averages, we add ~3.3 sigma to account for the variance.

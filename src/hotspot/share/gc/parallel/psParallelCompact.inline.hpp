@@ -94,6 +94,10 @@ inline void PSParallelCompact::adjust_pointer(T* p, ParCompactionManager* cm) {
     oop obj = CompressedOops::decode_not_null(heap_oop);
     assert(ParallelScavengeHeap::heap()->is_in(obj), "should be in heap");
 
+    if (cast_from_oop<HeapWord*>(obj) < dense_prefix(old_space_id) ) {
+      return;
+    }
+
     oop new_obj = cast_to_oop(summary_data().calc_new_pointer(obj, cm));
     assert(new_obj != nullptr, "non-null address for live objects");
     // Is it actually relocated at all?

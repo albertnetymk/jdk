@@ -319,6 +319,12 @@ HeapWord* ParallelCompactData::summarize_split_space(size_t src_region,
   assert(destination <= target_end, "sanity");
   assert(destination + _region_data[src_region].data_size() > target_end,
     "region should not fit into target space");
+  if (destination != target_end) {
+    // There is some free room in [destination, target_end). Then, we know that
+    // destination can't be start-of-region (i.e. region-aligned). Otherwise,
+    // the source-region must fit into a completely empty destination-region.
+    assert(!is_region_aligned(destination), "precondition");
+  }
   assert(is_region_aligned(target_end), "sanity");
 
   size_t partial_obj_size = _region_data[src_region].partial_obj_size();
@@ -478,6 +484,7 @@ bool ParallelCompactData::summarize(SplitInfo& split_info,
     // at which the source space can be 'split' so that part is copied to the
     // target space and the rest is copied elsewhere.
     if (dest_addr + words > target_end) {
+      assert(!split_info.is_split(cur_region), "inv");
       assert(source_next != nullptr, "source_next is null when splitting");
       *source_next = summarize_split_space(cur_region, split_info, dest_addr,
                                            target_end, target_next);

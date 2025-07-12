@@ -1495,9 +1495,6 @@ static void warn_fail_commit_memory(char* addr, size_t size, bool exec,
 //       problem.
 bool os::pd_commit_memory(char* addr, size_t size, bool exec) {
   int prot = exec ? PROT_READ|PROT_WRITE|PROT_EXEC : PROT_READ|PROT_WRITE;
-#if defined(__OpenBSD__)
-  // XXX: Work-around mmap/MAP_FIXED bug temporarily on OpenBSD
-  Events::log_memprotect(nullptr, "Protecting memory [" INTPTR_FORMAT "," INTPTR_FORMAT "] with protection modes %x", p2i(addr), p2i(addr+size), prot);
   if (::mprotect(addr, size, prot) == 0) {
     return true;
   } else {
@@ -1505,48 +1502,8 @@ bool os::pd_commit_memory(char* addr, size_t size, bool exec) {
     log_trace(os, map)("mprotect failed: " RANGEFMT " errno=(%s)",
                        RANGEFMTARGS(addr, size),
                        os::strerror(ep.saved_errno()));
+    return false;
   }
-#elif defined(__APPLE__)
-  if (exec) {
-    // Do not replace MAP_JIT mappings, see JDK-8234930
-    if (::mprotect(addr, size, prot) == 0) {
-      return true;
-    } else {
-      ErrnoPreserver ep;
-      log_trace(os, map)("mprotect failed: " RANGEFMT " errno=(%s)",
-                         RANGEFMTARGS(addr, size),
-                         os::strerror(ep.saved_errno()));
-    }
-  } else {
-    uintptr_t res = (uintptr_t) ::mmap(addr, size, prot,
-                                       MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);
-    if (res != (uintptr_t) MAP_FAILED) {
-      return true;
-    } else {
-      ErrnoPreserver ep;
-      log_trace(os, map)("mmap failed: " RANGEFMT " errno=(%s)",
-                         RANGEFMTARGS(addr, size),
-                         os::strerror(ep.saved_errno()));
-    }
-  }
-#else
-  uintptr_t res = (uintptr_t) ::mmap(addr, size, prot,
-                                     MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);
-  if (res != (uintptr_t) MAP_FAILED) {
-    return true;
-  } else {
-    ErrnoPreserver ep;
-    log_trace(os, map)("mmap failed: " RANGEFMT " errno=(%s)",
-                       RANGEFMTARGS(addr, size),
-                       os::strerror(ep.saved_errno()));
-  }
-#endif
-
-  // Warn about any commit errors we see in non-product builds just
-  // in case mmap() doesn't work as described on the man page.
-  NOT_PRODUCT(warn_fail_commit_memory(addr, size, exec, errno);)
-
-  return false;
 }
 
 bool os::pd_commit_memory(char* addr, size_t size, size_t alignment_hint,
@@ -1648,7 +1605,7 @@ bool os::pd_uncommit_memory(char* addr, size_t size, bool exec) {
     }
   } else {
     uintptr_t res = (uintptr_t) ::mmap(addr, size, PROT_NONE,
-        MAP_PRIVATE|MAP_FIXED|MAP_NORESERVE|MAP_ANONYMOUS, -1, 0);
+        MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);
     if (res == (uintptr_t) MAP_FAILED) {
       ErrnoPreserver ep;
       log_trace(os, map)("mmap failed: " RANGEFMT " errno=(%s)",
@@ -1660,7 +1617,7 @@ bool os::pd_uncommit_memory(char* addr, size_t size, bool exec) {
   }
 #else
   uintptr_t res = (uintptr_t) ::mmap(addr, size, PROT_NONE,
-                                     MAP_PRIVATE|MAP_FIXED|MAP_NORESERVE|MAP_ANONYMOUS, -1, 0);
+                                     MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);
   if (res == (uintptr_t) MAP_FAILED) {
     ErrnoPreserver ep;
     log_trace(os, map)("mmap failed: " RANGEFMT " errno=(%s)",
@@ -1687,7 +1644,7 @@ bool os::remove_stack_guard_pages(char* addr, size_t size) {
 // function returns null to indicate failure.
 static char* anon_mmap(char* requested_addr, size_t bytes, bool exec) {
   // MAP_FIXED is intentionally left out, to leave existing mappings intact.
-  const int flags = MAP_PRIVATE | MAP_NORESERVE | MAP_ANONYMOUS
+  const int flags = MAP_PRIVATE | MAP_ANONYMOUS
       MACOS_ONLY(| (exec ? MAP_JIT : 0));
 
   // Map reserved/uncommitted pages PROT_NONE so we fail early if we

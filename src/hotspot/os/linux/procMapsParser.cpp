@@ -84,7 +84,7 @@ void ProcSmapsParser::scan_additional_line(ProcSmapsInfo& out) {
     SCAN(rd);
     SCAN(wr);
     SCAN(ex);
-    SCAN(nr);
+    // SCAN(nr);
     SCAN(sh);
     SCAN(hg);
     SCAN(ht);

@@ -49,7 +49,7 @@ public:
     _num_mappings++;
     _vsize += info.vsize();
     _rss += info.rss;
-    _committed += info.nr ? 0 : info.vsize();
+    _committed += info.wr ? 0 : info.vsize();
     _shared += info.sh ? info.vsize() : 0;
     _swapped_out += info.swap;
     _hugetlb += info.private_hugetlb + info.shared_hugetlb;
@@ -102,7 +102,7 @@ public:
         num_printed++;                                      \
       }
       PRINTIF(info.sh, "shrd");
-      PRINTIF(!info.nr, "com");
+      PRINTIF(info.wr, "com");
       PRINTIF(info.swap > 0, "swap");
       PRINTIF(info.ht, "huge");
       PRINTIF(info.anonhugepages > 0, "thp");

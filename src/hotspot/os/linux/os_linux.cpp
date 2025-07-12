@@ -2748,29 +2748,6 @@ void os::get_summary_cpu_info(char* cpuinfo, size_t length) {
 ////////////////////////////////////////////////////////////////////////////////
 // Virtual Memory
 
-static bool recoverable_mmap_error(int err) {
-  // See if the error is one we can let the caller handle. This
-  // list of errno values comes from JBS-6843484. I can't find a
-  // Linux man page that documents this specific set of errno
-  // values so while this list currently matches Solaris, it may
-  // change as we gain experience with this failure mode.
-  switch (err) {
-  case EBADF:
-  case EINVAL:
-  case ENOTSUP:
-    // let the caller deal with these errors
-    return true;
-
-  default:
-    // Any remaining errors on this OS can cause our reserved mapping
-    // to be lost. That can cause confusion where different data
-    // structures think they have the same memory mapped. The worst
-    // scenario is if both the VM and a library think they have the
-    // same memory mapped.
-    return false;
-  }
-}
-
 static void warn_fail_commit_memory(char* addr, size_t size, bool exec,
                                     int err) {
   warning("INFO: os::commit_memory(" PTR_FORMAT ", %zu, %d) failed; error='%s' (errno=%d)",
@@ -2790,32 +2767,19 @@ static void warn_fail_commit_memory(char* addr, size_t size,
 //       problem.
 int os::Linux::commit_memory_impl(char* addr, size_t size, bool exec) {
   int prot = exec ? PROT_READ|PROT_WRITE|PROT_EXEC : PROT_READ|PROT_WRITE;
-  uintptr_t res = (uintptr_t) ::mmap(addr, size, prot,
-                                     MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);
-  if (res != (uintptr_t) MAP_FAILED) {
+  int res = ::mprotect(addr, size, prot);
+  if (res == 0) {
     if (UseNUMAInterleaving) {
       numa_make_global(addr, size);
     }
     return 0;
   } else {
     ErrnoPreserver ep;
-    log_trace(os, map)("mmap failed: " RANGEFMT " errno=(%s)",
+    log_trace(os, map)("mprotect failed: " RANGEFMT " errno=(%s)",
                        RANGEFMTARGS(addr, size),
                        os::strerror(ep.saved_errno()));
+    return res;
   }
-
-  int err = errno;  // save errno from mmap() call above
-
-  if (!recoverable_mmap_error(err)) {
-    ErrnoPreserver ep;
-    log_trace(os, map)("mmap failed: " RANGEFMT " errno=(%s)",
-                       RANGEFMTARGS(addr, size),
-                       os::strerror(ep.saved_errno()));
-    warn_fail_commit_memory(addr, size, exec, err);
-    vm_exit_out_of_memory(size, OOM_MMAP_ERROR, "committing reserved memory.");
-  }
-
-  return err;
 }
 
 bool os::pd_commit_memory(char* addr, size_t size, bool exec) {
@@ -3344,7 +3308,7 @@ struct bitmask* os::Linux::_numa_cpunodebind_bitmask;
 
 bool os::pd_uncommit_memory(char* addr, size_t size, bool exec) {
   uintptr_t res = (uintptr_t) ::mmap(addr, size, PROT_NONE,
-                                     MAP_PRIVATE|MAP_FIXED|MAP_NORESERVE|MAP_ANONYMOUS, -1, 0);
+                                     MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);
   if (res == (uintptr_t) MAP_FAILED) {
     ErrnoPreserver ep;
     log_trace(os, map)("mmap failed: " RANGEFMT " errno=(%s)",
@@ -3489,7 +3453,7 @@ static char* anon_mmap(char* requested_addr, size_t bytes) {
   //
   // Backward compatibility: Older kernels will ignore the unknown flag; so mmap will behave
   // as in mode (a).
-  const int flags = MAP_PRIVATE | MAP_NORESERVE | MAP_ANONYMOUS |
+  const int flags = MAP_PRIVATE | MAP_ANONYMOUS |
                     ((requested_addr != nullptr) ? MAP_FIXED_NOREPLACE : 0);
 
   // Map reserved/uncommitted pages PROT_NONE so we fail early if we

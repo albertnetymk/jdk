@@ -51,7 +51,7 @@ struct ProcSmapsInfo {
   size_t swap;
   bool rd, wr, ex;
   bool sh; // shared
-  bool nr; // no reserve
+  // bool nr; // no reserve
   bool hg; // thp-advised
   bool ht; // uses hugetlb pages
   bool nh; // thp forbidden
@@ -64,7 +64,7 @@ struct ProcSmapsInfo {
     from = to = nullptr;
     prot[0] = filename[0] = '\0';
     kernelpagesize = rss = private_hugetlb = shared_hugetlb = anonhugepages = swap = 0;
-    rd = wr = ex = sh = nr = hg = ht = nh = false;
+    rd = wr = ex = sh = hg = ht = nh = false;
   }
 };
 

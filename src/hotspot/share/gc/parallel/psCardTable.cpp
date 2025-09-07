@@ -187,14 +187,41 @@ public:
     return *card == PSCardTable::clean_card_val();
   }
 
-  const CardValue* find_first_dirty_card(const CardValue* const start,
-                                         const CardValue* const end) {
-    for (const CardValue* i = start; i < end; ++i) {
-      if (is_dirty(i)) {
-        return i;
+  // Implemented word-iteration to skip long consecutive clean cards.
+  const CardValue* find_first_dirty_card(const CardValue* const start_card,
+                                         const CardValue* const end_card) {
+    using Word = uintptr_t;
+
+    const CardValue* current_card = start_card;
+
+    while (!is_aligned(current_card, sizeof(Word))) {
+      if (current_card >= end_card) {
+        return end_card;
+      }
+      if (is_dirty(current_card)) {
+        return current_card;
+      }
+      ++current_card;
+    }
+
+    // Word comparison
+    while (current_card + sizeof(Word) <= end_card) {
+      const Word* current_word = reinterpret_cast<const Word*>(current_card);
+      if (*current_word != (Word)CardTable::clean_card_row_val()) {
+        // Found a dirty card in this word; fall back to per-CardValue comparison.
+        break;
+      }
+      current_card += sizeof(Word);
+    }
+
+    // Per-CardValue comparison.
+    for (/* empty */; current_card < end_card; ++current_card) {
+      if (is_dirty(current_card)) {
+        return current_card;
       }
     }
-    return end;
+
+    return end_card;
   }
 
   const CardValue* find_first_clean_card(const CardValue* const start,

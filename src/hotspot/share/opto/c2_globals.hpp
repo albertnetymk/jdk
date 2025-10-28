@@ -280,7 +280,8 @@
           "When initializing fields, try to avoid needless zeroing")        \
                                                                             \
   product(bool, ReduceInitialCardMarks, true,                               \
-          "When initializing fields, try to avoid needless card marks")     \
+          "(Deprecated) When initializing fields, try to avoid needless "   \
+          "card marks")                                                    \
                                                                             \
   product(bool, ReduceBulkZeroing, true,                                    \
           "When bulk-initializing, try to avoid needless zeroing")          \

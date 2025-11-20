@@ -40,6 +40,8 @@ PSAdaptiveSizePolicy::PSAdaptiveSizePolicy(size_t space_alignment,
                                            double gc_pause_goal_sec) :
      AdaptiveSizePolicy(gc_pause_goal_sec),
      _avg_promoted(new AdaptivePaddedNoZeroDevAverage(AdaptiveSizePolicyWeight, PromotedPadding)),
+     _avg_os_free_mem(seq_default_alpha_value),
+     _avg_os_mem_depletion_rate(seq_default_alpha_value),
      _space_alignment(space_alignment),
      _young_gen_size_increment_supplement(YoungGenerationSizeSupplement),
      _tenuring_threshold_gc_count(0) {}
@@ -57,7 +59,7 @@ void PSAdaptiveSizePolicy::major_collection_end() {
   double major_pause_in_seconds = _major_timer.seconds();
 
   record_gc_duration(major_pause_in_seconds);
-  _trimmed_major_gc_time_seconds.add(major_pause_in_seconds);
+  _major_gc_time_seconds.add(major_pause_in_seconds);
 }
 
 void PSAdaptiveSizePolicy::print_stats(bool is_survivor_overflowing) {
@@ -94,7 +96,7 @@ size_t PSAdaptiveSizePolicy::compute_desired_eden_size(bool is_survivor_overflow
 
   if (mutator_time_percent() < throughput_goal) {
     size_t new_eden;
-    const double expected_gc_distance = _trimmed_minor_gc_time_seconds.last() * local_GCTimeRatio;
+    const double expected_gc_distance = _minor_gc_time_seconds.last() * local_GCTimeRatio;
     if (gc_distance >= expected_gc_distance) {
       // The lastest sample already satisfies throughput goal; keep the current size
       new_eden = cur_eden;
@@ -127,7 +129,7 @@ size_t PSAdaptiveSizePolicy::compute_desired_eden_size(bool is_survivor_overflow
     size_t delta = MIN2(eden_increment(cur_eden) / AdaptiveSizeDecrementScaleFactor, cur_eden / 2);
     double delta_factor = (double) delta / cur_eden;
 
-    const double gc_time_lower_estimate = _trimmed_minor_gc_time_seconds.davg() - _trimmed_minor_gc_time_seconds.dsd();
+    const double gc_time_lower_estimate = _minor_gc_time_seconds.davg() - _minor_gc_time_seconds.dsd();
     // Limit gc-frequency so that promoted rate is < 1M/s
     // promoted_bytes_estimate() / (gc_distance + gc_time_lower_estimate) < 1M/s
     // ==> promoted_bytes_estimate() / M - gc_time_lower_estimate < gc_distance
@@ -296,6 +298,96 @@ void PSAdaptiveSizePolicy::update_averages(bool is_survivor_overflow,
   avg_promoted()->sample(promoted);
   _promoted_bytes.add(promoted);
 
-  double promotion_rate = promoted / (_gc_distance_seconds_seq.last() + _trimmed_minor_gc_time_seconds.last());
+  double promotion_rate = promoted / (_gc_distance_seconds_seq.last() + _minor_gc_time_seconds.last());
   _promotion_rate_bytes_per_sec.add(promotion_rate);
+}
+
+void PSAdaptiveSizePolicy::adapt_to_os_memory_pressure() {
+  uint64_t free_mem;
+  if (!os::free_memory(free_mem)) {
+    log_debug(gc, ergo)("Adaptive: OS free_memory API failed");
+    return;
+  }
+
+  // Record depletion rate
+  Ticks now = Ticks::now();
+  if (_last_os_update_time.value() > 0) {
+    Tickspan delta_t = now - _last_os_update_time;
+    if (delta_t.seconds() > 0.0) {
+      // Only focus on positive delta_mem, i.e., memory is being depleted
+      double delta_mem = MAX2((double)_avg_os_free_mem.last() - (double)free_mem,
+                              0.0);
+      double rate = delta_mem / delta_t.seconds();
+      _avg_os_mem_depletion_rate.add(rate);
+    }
+  }
+  _last_os_update_time = now;
+
+  // Record free mem
+  _avg_os_free_mem.add((double)free_mem);
+
+  // Check if memory is draining:
+  // 1. Current free memory is significantly less than average (e.g. 5% drop)
+  // 2. OR estimated time to exhaustion is low (e.g. < 60 seconds)
+  bool is_draining = false;
+
+  // Criterion 1: Sudden drop
+  if (_avg_os_free_mem.num() > 10 && (double)free_mem < _avg_os_free_mem.avg() * 0.95) {
+    is_draining = true;
+  }
+
+  // Criterion 2: High depletion rate
+  if (!is_draining && _avg_os_mem_depletion_rate.num() > 10) {
+    double avg_rate = _avg_os_mem_depletion_rate.avg();
+    if (avg_rate > 0.0) {
+      double time_to_exhaustion = free_mem / avg_rate;
+      // 1 min countdown
+      if (time_to_exhaustion < 60.0) {
+        is_draining = true;
+        log_debug(gc, ergo)("Adaptive: OS memory draining fast. Estimated time to exhaustion: %.1f s", time_to_exhaustion);
+      }
+    }
+  }
+
+  const double low_memory_threshold_percent = 0.20;
+  uint64_t physical_mem = os::physical_memory();
+  bool is_low = free_mem < (physical_mem * low_memory_threshold_percent);
+  if (is_low) {
+    log_debug(gc, ergo)("Adaptive: OS memory is low (<20%%): free " UINT64_FORMAT "K, physical " UINT64_FORMAT "K",
+                        free_mem / K, physical_mem / K);
+  }
+
+  uint current_ratio = AtomicAccess::load(&GCTimeRatio);
+  uint new_ratio = current_ratio;
+  const uint min_ratio = 1;
+  const uint max_ratio = 999;
+
+  // We use a geometric progression (step depends on current value) to maintain
+  // a more uniform impact on the actual GC cost (1/(1+ratio)).
+  // Adjust by ~5% of current value, min step 1.
+  uint step = MAX2(1u, current_ratio / 20);
+
+  if (is_low || is_draining) {
+    // Incrementally lower GCTimeRatio to encourage more frequent GCs
+    if (current_ratio > min_ratio) {
+      new_ratio = (current_ratio > step) ? current_ratio - step : min_ratio;
+      if (new_ratio < min_ratio) new_ratio = min_ratio; // Clamp to min
+    }
+  } else {
+    // Incrementally increase GCTimeRatio if memory is healthy
+    if (current_ratio < max_ratio) {
+      new_ratio = current_ratio + step;
+      if (new_ratio > max_ratio) new_ratio = max_ratio;
+    }
+  }
+
+  if (new_ratio != current_ratio) {
+    AtomicAccess::store(&GCTimeRatio, new_ratio);
+    if (new_ratio < current_ratio) {
+      log_debug(gc, ergo)("Adaptive: OS memory pressure detected (low: %s, draining: %s). Decreasing GCTimeRatio to %u",
+                          is_low ? "true" : "false", is_draining ? "true" : "false", new_ratio);
+    } else {
+      log_debug(gc, ergo)("Adaptive: OS memory pressure relieved. Increasing GCTimeRatio to %u", new_ratio);
+    }
+  }
 }

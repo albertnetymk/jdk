@@ -34,13 +34,15 @@ elapsedTimer AdaptiveSizePolicy::_major_timer;
 AdaptiveSizePolicy::AdaptiveSizePolicy(double gc_pause_goal_sec) :
   _gc_distance_timer(),
   _gc_distance_seconds_seq(seq_default_alpha_value),
-  _trimmed_minor_gc_time_seconds(NumOfGCSample, seq_default_alpha_value),
-  _trimmed_major_gc_time_seconds(NumOfGCSample, seq_default_alpha_value),
+  _minor_gc_time_seconds(seq_default_alpha_value),
+  _major_gc_time_seconds(seq_default_alpha_value),
   _gc_samples(),
   _promoted_bytes(seq_default_alpha_value),
   _survived_bytes(seq_default_alpha_value),
   _promotion_rate_bytes_per_sec(seq_default_alpha_value),
   _peak_old_used_bytes_seq(seq_default_alpha_value),
+  _reclaimed_bytes_in_minor_gc(seq_default_alpha_value),
+  _reclaimed_bytes_in_major_gc(seq_default_alpha_value),
   _minor_pause_young_estimator(new LinearLeastSquareFit(AdaptiveSizePolicyWeight)),
   _threshold_tolerance_percent(1.0 + ThresholdTolerance/100.0),
   _gc_pause_goal_sec(gc_pause_goal_sec) {}
@@ -58,7 +60,7 @@ void AdaptiveSizePolicy::minor_collection_end(size_t eden_capacity_in_bytes) {
   double minor_pause_in_ms = minor_pause_in_seconds * MILLIUNITS;
 
   record_gc_duration(minor_pause_in_seconds);
-  _trimmed_minor_gc_time_seconds.add(minor_pause_in_seconds);
+  _minor_gc_time_seconds.add(minor_pause_in_seconds);
 
   {
     double eden_size_in_mbytes = ((double)eden_capacity_in_bytes)/((double)M);

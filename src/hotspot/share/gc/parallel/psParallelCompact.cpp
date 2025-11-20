@@ -851,6 +851,16 @@ bool PSParallelCompact::invoke(bool clear_all_soft_refs,
     // done before resizing.
     post_compact(pending_allocation);
 
+    {
+      // The young-gen used might not be accurate if promotion-failure occurred.
+      size_t pre_heap_used = pre_gc_values.young_gen_used() + pre_gc_values.old_gen_used();
+      size_t post_heap_used = heap->used();
+      size_t reclaime_bytes = pre_heap_used > post_heap_used
+                            ? pre_heap_used - post_heap_used
+                            : 0;
+      size_policy->record_major_reclaimed_bytes(reclaime_bytes);
+    }
+
     size_policy->major_collection_end();
 
     size_policy->sample_old_gen_used_bytes(MAX2(pre_gc_values.old_gen_used(), old_gen->used_in_bytes()));

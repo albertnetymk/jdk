@@ -407,6 +407,16 @@ bool PSScavenge::invoke(bool clear_soft_refs) {
     if (promotion_failure_occurred) {
       clean_up_failed_promotion();
       log_info(gc, promotion)("Promotion failed");
+      // Set the claimed bytes to zero if young-gc fails.
+      size_policy->record_minor_reclaimed_bytes(0);
+    } else {
+      size_t pre_heap_used = pre_gc_values.young_gen_used() + pre_gc_values.old_gen_used();
+      // After a successful young-gc, only to-space contains live objs.
+      size_t post_heap_used = young_gen->to_space()->used_in_bytes() + old_gen->used_in_bytes();
+      size_t reclaim_bytes = pre_heap_used > post_heap_used
+                           ? pre_heap_used - post_heap_used
+                           : 0;
+      size_policy->record_minor_reclaimed_bytes(reclaim_bytes);
     }
 
     _gc_tracer.report_tenuring_threshold(tenuring_threshold());

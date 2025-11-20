@@ -110,6 +110,8 @@ class ParallelScavengeHeap : public CollectedHeap {
 
   uintx _gc_overhead_counter;
 
+  uint _last_full_gc_total_collections;
+
   bool _is_heap_almost_full;
 
   void initialize_serviceability() override;
@@ -145,6 +147,11 @@ class ParallelScavengeHeap : public CollectedHeap {
   // Returns true if a young GC should be attempted, false if a full GC is preferred.
   bool should_attempt_young_gc() const;
 
+  bool is_proactive_full_gc_desirable() const;
+
+
+  void invoke_gc(bool is_full, PSPendingAllocation pending_allocation);
+
 public:
   ParallelScavengeHeap() :
     CollectedHeap(),
@@ -155,6 +162,7 @@ public:
     _old_pool(nullptr),
     _workers("GC Thread", ParallelGCThreads),
     _gc_overhead_counter(0),
+    _last_full_gc_total_collections(0),
     _is_heap_almost_full(false) {}
 
   // The alignment used for spaces in young gen and old gen

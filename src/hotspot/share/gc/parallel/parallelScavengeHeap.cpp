@@ -173,6 +173,10 @@ void ParallelScavengeHeap::post_initialize() {
 }
 
 void ParallelScavengeHeap::gc_epilogue(bool full) {
+  if (full) {
+    _last_full_gc_total_collections = total_collections();
+  }
+
   size_t capacity_bytes = max_capacity();
   size_t free_bytes = capacity_bytes - used();
 
@@ -372,6 +376,43 @@ void ParallelScavengeHeap::do_full_collection(bool clear_all_soft_refs) {
   PSParallelCompact::invoke(clear_all_soft_refs, should_do_max_compaction);
 }
 
+bool ParallelScavengeHeap::is_proactive_full_gc_desirable() const {
+  // Check if a proactive full-gc is desirable, based on enough history data.
+  constexpr static uint FullGCThreshold = 10;
+  constexpr static uint MinorGCThreshold = 50;
+
+  if (!UseAdaptiveSizePolicy ||
+      total_full_collections() < FullGCThreshold ||
+      (total_collections() - total_full_collections() < MinorGCThreshold)) {
+    return false;
+  }
+
+  constexpr static double OldGenUsageThreshold = 0.50;
+  // Use max capacity
+  if (old_gen()->used_in_bytes() < old_gen()->reserved_size() * OldGenUsageThreshold) {
+    return false;
+  }
+
+  PSAdaptiveSizePolicy* policy = _size_policy;
+  double minor_reclaim_rate = policy->average_reclaim_rate_of_minor_gc();
+  double major_reclaim_rate = policy->average_reclaim_rate_of_major_gc();
+
+  constexpr static double ReclaimMargin = 0.30;
+  static_assert(ReclaimMargin > 0, "should be positive");
+  bool is_major_more_effective = major_reclaim_rate > minor_reclaim_rate * (1 + ReclaimMargin);
+
+  const double individual_gc_time_ratio = policy->major_gc_time_estimate() / MAX2(policy->minor_gc_time_estimate(), 0.001);
+  constexpr static double MinFullGCInterval = 50;
+  const double min_full_gc_interval = MAX2(MinFullGCInterval, individual_gc_time_ratio);
+  bool is_interval_long_enough = (total_collections() - _last_full_gc_total_collections) >= min_full_gc_interval;
+
+  log_trace(gc, ergo)("Full/Young reclaim_rate (bytes/s) %.2f vs %.2f; Full/Young total GC time (s): %.1f vs %.1f",
+    major_reclaim_rate, minor_reclaim_rate,
+    policy->major_gc_time_sum(), policy->minor_gc_time_sum());
+
+  return is_major_more_effective && is_interval_long_enough;
+}
+
 bool ParallelScavengeHeap::should_attempt_young_gc() const {
   const bool ShouldRunYoungGC = true;
   const bool ShouldRunFullGC = false;
@@ -415,6 +456,11 @@ bool ParallelScavengeHeap::should_attempt_young_gc() const {
         return ShouldRunFullGC;
       }
     }
+  }
+
+  if (is_proactive_full_gc_desirable()) {
+    log_debug(gc, ergo)("Run proactive full-gc.");
+    return ShouldRunFullGC;
   }
 
   // No particular reasons to run full-gc, so young-gc.
@@ -476,13 +522,18 @@ HeapWord* ParallelScavengeHeap::expand_heap_and_allocate(size_t size, bool is_tl
 HeapWord* ParallelScavengeHeap::satisfy_failed_allocation(size_t size, bool is_tlab) {
   assert(size != 0, "precondition");
 
+  // Called before young/full-gc.
+  if (UseAdaptiveSizePolicy) {
+    _size_policy->adapt_to_os_memory_pressure();
+  }
+
   HeapWord* result = nullptr;
 
   if (!_is_heap_almost_full) {
     // If young-gen can handle this allocation, attempt young-gc firstly, as young-gc is usually cheaper.
     bool should_run_young_gc = is_tlab || should_alloc_in_eden(size);
 
-    collect_at_safepoint(!should_run_young_gc, {size, is_tlab});
+    invoke_gc(!should_run_young_gc, {size, is_tlab});
 
     // If gc-overhead is reached, we will skip allocation.
     if (!check_gc_overhead_limit()) {
@@ -570,6 +621,16 @@ void ParallelScavengeHeap::collect(GCCause::Cause cause) {
 
 void ParallelScavengeHeap::collect_at_safepoint(bool is_full,
                                                 PSPendingAllocation pending_allocation) {
+  // Called before young/full-gc.
+  if (UseAdaptiveSizePolicy) {
+    _size_policy->adapt_to_os_memory_pressure();
+  }
+
+  invoke_gc(is_full, pending_allocation);
+}
+
+void ParallelScavengeHeap::invoke_gc(bool is_full,
+                                     PSPendingAllocation pending_allocation) {
   assert(!GCLocker::is_active(), "precondition");
   bool clear_soft_refs = GCCause::should_clear_all_soft_refs(_gc_cause);
 

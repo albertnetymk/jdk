@@ -29,6 +29,7 @@
 #include "gc/shared/adaptiveSizePolicy.hpp"
 #include "gc/shared/gcUtil.hpp"
 #include "utilities/align.hpp"
+#include "utilities/ticks.hpp"
 
 // This class keeps statistical information and computes the
 // optimal free space for both the young and old generation
@@ -38,6 +39,13 @@
 class PSAdaptiveSizePolicy : public AdaptiveSizePolicy {
   // Statistics for promoted objs
   AdaptivePaddedNoZeroDevAverage*   _avg_promoted;
+
+  // Stats for OS total free memory
+  NumberSeq _avg_os_free_mem;
+
+  // Stats for OS free mem depletion rate
+  NumberSeq _avg_os_mem_depletion_rate;
+  Ticks _last_os_update_time;
 
   const size_t _space_alignment; // alignment for eden, survivors
 
@@ -117,6 +125,9 @@ class PSAdaptiveSizePolicy : public AdaptiveSizePolicy {
 
   // Decay the supplemental growth additive.
   void decay_supplemental_growth(uint num_minor_gcs);
+
+  // Update OS free memory statistics and adapt the GC policy if needed
+  void adapt_to_os_memory_pressure();
 };
 
 #endif // SHARE_GC_PARALLEL_PSADAPTIVESIZEPOLICY_HPP

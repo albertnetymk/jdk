@@ -58,15 +58,16 @@ class AdaptiveSizePolicy : public CHeapObj<mtGC> {
   elapsedTimer _gc_distance_timer;
   NumberSeq _gc_distance_seconds_seq;
 
-  static constexpr uint NumOfGCSample = 32;
-  // Recording the last NumOfGCSample number of minor/major gc durations
-  TruncatedSeq _trimmed_minor_gc_time_seconds;
-  TruncatedSeq _trimmed_major_gc_time_seconds;
+  // Recording minor/major gc durations
+  NumberSeq _minor_gc_time_seconds;
+  NumberSeq _major_gc_time_seconds;
 
   // A ring buffer with fixed size (NumOfGCSample) to record the most recent
   // samples of gc-duration (minor and major) so that we can calculate
   // mutator-wall-clock-time percentage for the given window.
   class GCSampleRingBuffer {
+    static constexpr uint NumOfGCSample = 32;
+
     double _start_instants[NumOfGCSample];
     double _durations[NumOfGCSample];
     double _duration_sum;
@@ -121,6 +122,10 @@ class AdaptiveSizePolicy : public CHeapObj<mtGC> {
   // The peak of used bytes in old-gen before/after young/full-gc
   NumberSeq _peak_old_used_bytes_seq;
 
+  // The number of bytes reclaimed in a minor/major gc.
+  NumberSeq _reclaimed_bytes_in_minor_gc;
+  NumberSeq _reclaimed_bytes_in_major_gc;
+
   // Variable for estimating the major and minor pause times.
   // These variables represent linear least-squares fits of
   // the data.
@@ -135,13 +140,6 @@ class AdaptiveSizePolicy : public CHeapObj<mtGC> {
 
   // Accessors
   double gc_pause_goal_sec() const { return _gc_pause_goal_sec; }
-
-  double minor_gc_time_sum() const {
-    return _trimmed_minor_gc_time_seconds.sum();
-  }
-  double major_gc_time_sum() const {
-    return _trimmed_major_gc_time_seconds.sum();
-  }
 
   void record_gc_duration(double gc_duration) {
     _gc_samples.record_sample(gc_duration);
@@ -173,22 +171,30 @@ public:
     _gc_distance_seconds_seq.add(_gc_distance_timer.seconds());
   }
 
+  double minor_gc_time_sum() const {
+    return _minor_gc_time_seconds.sum();
+  }
+
+  double major_gc_time_sum() const {
+    return _major_gc_time_seconds.sum();
+  }
+
   double minor_gc_time_estimate() const {
-    return _trimmed_minor_gc_time_seconds.davg()
-         + _trimmed_minor_gc_time_seconds.dsd();
+    return _minor_gc_time_seconds.davg()
+         + _minor_gc_time_seconds.dsd();
   }
 
   double minor_gc_time_conservative_estimate() const {
-    double davg_plus_dsd = _trimmed_minor_gc_time_seconds.davg()
-                         + _trimmed_minor_gc_time_seconds.dsd();
-    double avg_plus_sd =  _trimmed_minor_gc_time_seconds.avg()
-                         + _trimmed_minor_gc_time_seconds.sd();
+    double davg_plus_dsd = _minor_gc_time_seconds.davg()
+                         + _minor_gc_time_seconds.dsd();
+    double avg_plus_sd =  _minor_gc_time_seconds.avg()
+                         + _minor_gc_time_seconds.sd();
     return MAX2(davg_plus_dsd, avg_plus_sd);
   }
 
   double major_gc_time_estimate() const {
-    return _trimmed_major_gc_time_seconds.davg()
-         + _trimmed_major_gc_time_seconds.dsd();
+    return _major_gc_time_seconds.davg()
+         + _major_gc_time_seconds.dsd();
   }
 
   void sample_old_gen_used_bytes(size_t used_bytes) {
@@ -230,6 +236,24 @@ public:
   // policy to call these methods at the correct times!
   void minor_collection_begin();
   void minor_collection_end(size_t eden_capacity_in_bytes);
+
+  double average_reclaim_rate_of_minor_gc() const {
+    return _reclaimed_bytes_in_minor_gc.avg() /
+      MAX2(_minor_gc_time_seconds.avg(), 0.0001);
+  }
+
+  double average_reclaim_rate_of_major_gc() const {
+    return _reclaimed_bytes_in_major_gc.avg() /
+      MAX2(_major_gc_time_seconds.avg(), 0.0001);
+  }
+
+  void record_minor_reclaimed_bytes(size_t num_bytes) {
+    _reclaimed_bytes_in_minor_gc.add(num_bytes);
+  }
+
+  void record_major_reclaimed_bytes(size_t num_bytes) {
+    _reclaimed_bytes_in_major_gc.add(num_bytes);
+  }
 
   LinearLeastSquareFit* minor_pause_young_estimator() {
     return _minor_pause_young_estimator;

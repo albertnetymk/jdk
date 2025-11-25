@@ -151,66 +151,10 @@ void ParallelCompactData::RegionData::verify_clear() {
 #endif
 
 SpaceInfo PSParallelCompact::_space_info[PSParallelCompact::last_space_id];
-
+HeapWord* PSParallelCompact::_old_space_dense_prefix = nullptr;
+HeapWord* PSParallelCompact::_old_space_new_top = nullptr;
 SpanSubjectToDiscoveryClosure PSParallelCompact::_span_based_discoverer;
 ReferenceProcessor* PSParallelCompact::_ref_processor = nullptr;
-
-void SplitInfo::record(size_t split_region_idx, HeapWord* split_point, size_t preceding_live_words) {
-  assert(split_region_idx != 0, "precondition");
-
-  // Obj denoted by split_point will be deferred to the next space.
-  assert(split_point != nullptr, "precondition");
-
-  const ParallelCompactData& sd = PSParallelCompact::summary_data();
-
-  PSParallelCompact::RegionData* split_region_ptr = sd.region(split_region_idx);
-  assert(preceding_live_words < split_region_ptr->data_size(), "inv");
-
-  HeapWord* preceding_destination = split_region_ptr->destination();
-  assert(preceding_destination != nullptr, "inv");
-
-  // How many regions does the preceding part occupy
-  uint preceding_destination_count;
-  if (preceding_live_words == 0) {
-    preceding_destination_count = 0;
-  } else {
-    // -1 so that the ending address doesn't fall on the region-boundary
-    if (sd.region_align_down(preceding_destination) ==
-        sd.region_align_down(preceding_destination + preceding_live_words - 1)) {
-      preceding_destination_count = 1;
-    } else {
-      preceding_destination_count = 2;
-    }
-  }
-
-  _split_region_idx = split_region_idx;
-  _split_point = split_point;
-  _preceding_live_words = preceding_live_words;
-  _preceding_destination = preceding_destination;
-  _preceding_destination_count = preceding_destination_count;
-}
-
-void SplitInfo::clear()
-{
-  _split_region_idx = 0;
-  _split_point = nullptr;
-  _preceding_live_words = 0;
-  _preceding_destination = nullptr;
-  _preceding_destination_count = 0;
-  assert(!is_valid(), "sanity");
-}
-
-#ifdef  ASSERT
-void SplitInfo::verify_clear()
-{
-  assert(_split_region_idx == 0, "not clear");
-  assert(_split_point == nullptr, "not clear");
-  assert(_preceding_live_words == 0, "not clear");
-  assert(_preceding_destination == nullptr, "not clear");
-  assert(_preceding_destination_count == 0, "not clear");
-}
-#endif  // #ifdef ASSERT
-
 
 void PSParallelCompact::print_on(outputStream* st) {
   _mark_bitmap.print_on(st);
@@ -286,108 +230,6 @@ void ParallelCompactData::clear_range(size_t beg_region, size_t end_region) {
   }
 }
 
-// The total live words on src_region would overflow the target space, so find
-// the overflowing object and record the split point. The invariant is that an
-// obj should not cross space boundary.
-HeapWord* ParallelCompactData::summarize_split_space(size_t src_region,
-                                                     SplitInfo& split_info,
-                                                     HeapWord* const destination,
-                                                     HeapWord* const target_end,
-                                                     HeapWord** target_next) {
-  assert(destination <= target_end, "sanity");
-  assert(destination + _region_data[src_region].data_size() > target_end,
-    "region should not fit into target space");
-  assert(is_region_aligned(target_end), "sanity");
-
-  size_t partial_obj_size = _region_data[src_region].partial_obj_size();
-
-  if (destination + partial_obj_size > target_end) {
-    assert(partial_obj_size > 0, "inv");
-    // The overflowing obj is from a previous region.
-    //
-    // source-regions:
-    //
-    // ***************
-    // |     A|AA    |
-    // ***************
-    //       ^
-    //       | split-point
-    //
-    // dest-region:
-    //
-    // ********
-    // |~~~~A |
-    // ********
-    //       ^^
-    //       || target-space-end
-    //       |
-    //       | destination
-    //
-    // AAA would overflow target-space.
-    //
-    HeapWord* overflowing_obj = _region_data[src_region].partial_obj_addr();
-    size_t split_region = addr_to_region_idx(overflowing_obj);
-
-    // The number of live words before the overflowing object on this split region
-    size_t preceding_live_words;
-    if (is_region_aligned(overflowing_obj)) {
-      preceding_live_words = 0;
-    } else {
-      // Words accounted by the overflowing object on the split region
-      size_t overflowing_size = pointer_delta(region_align_up(overflowing_obj), overflowing_obj);
-      preceding_live_words = region(split_region)->data_size() - overflowing_size;
-    }
-
-    split_info.record(split_region, overflowing_obj, preceding_live_words);
-
-    // The [overflowing_obj, src_region_start) part has been accounted for, so
-    // must move back the new_top, now that this overflowing obj is deferred.
-    HeapWord* new_top = destination - pointer_delta(region_to_addr(src_region), overflowing_obj);
-
-    // If the overflowing obj was relocated to its original destination,
-    // those destination regions would have their source_region set. Now that
-    // this overflowing obj is relocated somewhere else, reset the
-    // source_region.
-    {
-      size_t range_start = addr_to_region_idx(region_align_up(new_top));
-      size_t range_end = addr_to_region_idx(region_align_up(destination));
-      for (size_t i = range_start; i < range_end; ++i) {
-        region(i)->set_source_region(0);
-      }
-    }
-
-    // Update new top of target space
-    *target_next = new_top;
-
-    return overflowing_obj;
-  }
-
-  // Obj-iteration to locate the overflowing obj
-  HeapWord* region_start = region_to_addr(src_region);
-  HeapWord* region_end = region_start + RegionSize;
-  HeapWord* cur_addr = region_start + partial_obj_size;
-  size_t live_words = partial_obj_size;
-
-  while (true) {
-    assert(cur_addr < region_end, "inv");
-    cur_addr = PSParallelCompact::mark_bitmap()->find_obj_beg(cur_addr, region_end);
-    // There must be an overflowing obj in this region
-    assert(cur_addr < region_end, "inv");
-
-    oop obj = cast_to_oop(cur_addr);
-    size_t obj_size = obj->size();
-    if (destination + live_words + obj_size > target_end) {
-      // Found the overflowing obj
-      split_info.record(src_region, cur_addr, live_words);
-      *target_next = destination + live_words;
-      return cur_addr;
-    }
-
-    live_words += obj_size;
-    cur_addr += obj_size;
-  }
-}
-
 size_t ParallelCompactData::live_words_in_space(const MutableSpace* space,
                                                 HeapWord** full_region_prefix_end) {
   size_t cur_region = addr_to_region_idx(space->bottom());
@@ -419,24 +261,18 @@ size_t ParallelCompactData::live_words_in_space(const MutableSpace* space,
   }
   return live_words;
 }
-
-bool ParallelCompactData::summarize(SplitInfo& split_info,
-                                    HeapWord* source_beg, HeapWord* source_end,
-                                    HeapWord** source_next,
-                                    HeapWord* target_beg, HeapWord* target_end,
-                                    HeapWord** target_next)
-{
-  HeapWord* const source_next_val = source_next == nullptr ? nullptr : *source_next;
-  log_develop_trace(gc, compaction)(
-      "sb=" PTR_FORMAT " se=" PTR_FORMAT " sn=" PTR_FORMAT
-      "tb=" PTR_FORMAT " te=" PTR_FORMAT " tn=" PTR_FORMAT,
-      p2i(source_beg), p2i(source_end), p2i(source_next_val),
-      p2i(target_beg), p2i(target_end), p2i(*target_next));
+// Summarize live objs in [source_beg, source_end).
+// Every region in this range will be assigned at most two destination regions.
+// The first non-empty region will get target_beg as destination addr.
+void ParallelCompactData::summarize(HeapWord* source_beg,
+                                    HeapWord* source_end,
+                                    HeapWord** new_top_addr) {
+  assert(is_region_aligned(source_beg), "precondition");
 
   size_t cur_region = addr_to_region_idx(source_beg);
   const size_t end_region = addr_to_region_idx(region_align_up(source_end));
 
-  HeapWord *dest_addr = target_beg;
+  HeapWord *dest_addr = *new_top_addr;
   for (/* empty */; cur_region < end_region; cur_region++) {
     size_t words = _region_data[cur_region].data_size();
 
@@ -445,26 +281,9 @@ bool ParallelCompactData::summarize(SplitInfo& split_info,
       continue;
     }
 
-    if (split_info.is_split(cur_region)) {
-      assert(words > split_info.preceding_live_words(), "inv");
-      words -= split_info.preceding_live_words();
-    }
-
     _region_data[cur_region].set_destination(dest_addr);
 
-    // If cur_region does not fit entirely into the target space, find a point
-    // at which the source space can be 'split' so that part is copied to the
-    // target space and the rest is copied elsewhere.
-    if (dest_addr + words > target_end) {
-      assert(source_next != nullptr, "source_next is null when splitting");
-      *source_next = summarize_split_space(cur_region, split_info, dest_addr,
-                                           target_end, target_next);
-      return false;
-    }
-
-    uint destination_count = split_info.is_split(cur_region)
-                             ? split_info.preceding_destination_count()
-                             : 0;
+    uint destination_count = 0;
 
     HeapWord* const last_addr = dest_addr + words - 1;
     const size_t dest_region_1 = addr_to_region_idx(dest_addr);
@@ -490,8 +309,7 @@ bool ParallelCompactData::summarize(SplitInfo& split_info,
     dest_addr += words;
   }
 
-  *target_next = dest_addr;
-  return true;
+  *new_top_addr = dest_addr;
 }
 
 #ifdef ASSERT
@@ -512,6 +330,7 @@ unsigned int        PSParallelCompact::_maximum_compaction_gc_num = 0;
 CollectorCounters*  PSParallelCompact::_counters = nullptr;
 ParMarkBitMap       PSParallelCompact::_mark_bitmap;
 ParallelCompactData PSParallelCompact::_summary_data;
+bool                PSParallelCompact::_should_right_shift_gen_boundary = false;
 
 PSParallelCompact::IsAliveClosure PSParallelCompact::_is_alive_closure;
 
@@ -580,16 +399,13 @@ void PSParallelCompact::initialize_space_info()
   PSYoungGen* young_gen = heap->young_gen();
 
   _space_info[old_space_id].set_space(heap->old_gen()->object_space());
-  _space_info[eden_space_id].set_space(young_gen->eden_space());
   _space_info[from_space_id].set_space(young_gen->from_space());
   _space_info[to_space_id].set_space(young_gen->to_space());
-
-  _space_info[old_space_id].set_start_array(heap->old_gen()->start_array());
+  _space_info[eden_space_id].set_space(young_gen->eden_space());
 }
 
 void
-PSParallelCompact::clear_data_covering_space(SpaceId id)
-{
+PSParallelCompact::clear_data_covering_space(SpaceId id) {
   // At this point, top is the value before GC, new_top() is the value that will
   // be set at the end of GC.  The marking bitmap is cleared to top; nothing
   // should be marked above top.  The summary data is cleared to the larger of
@@ -597,7 +413,7 @@ PSParallelCompact::clear_data_covering_space(SpaceId id)
   MutableSpace* const space = _space_info[id].space();
   HeapWord* const bot = space->bottom();
   HeapWord* const top = space->top();
-  HeapWord* const max_top = MAX2(top, _space_info[id].new_top());
+  HeapWord* const max_top = MAX2(top, _old_space_new_top);
 
   _mark_bitmap.clear_range(bot, top);
 
@@ -605,13 +421,6 @@ PSParallelCompact::clear_data_covering_space(SpaceId id)
   const size_t end_region =
     _summary_data.addr_to_region_idx(_summary_data.region_align_up(max_top));
   _summary_data.clear_range(beg_region, end_region);
-
-  // Clear the data used to 'split' regions.
-  SplitInfo& split_info = _space_info[id].split_info();
-  if (split_info.is_valid()) {
-    split_info.clear();
-  }
-  DEBUG_ONLY(split_info.verify_clear();)
 }
 
 void PSParallelCompact::pre_compact()
@@ -622,6 +431,11 @@ void PSParallelCompact::pre_compact()
   // collections will have swapped the spaces an unknown number of times.
   GCTraceTime(Debug, gc, phases) tm("Pre Compact", &_gc_timer);
   ParallelScavengeHeap* heap = ParallelScavengeHeap::heap();
+  if (heap->young_gen()->reserved_size() > 0 && !heap->young_gen()->is_from_to_layout()) {
+    // Ensure from-to layout so that all objs are slided to lower address,
+    // according to the order in SpaceId.
+    heap->young_gen()->swap_spaces();
+  }
   _space_info[from_space_id].set_space(heap->young_gen()->from_space());
   _space_info[to_space_id].set_space(heap->young_gen()->to_space());
 
@@ -643,8 +457,7 @@ void PSParallelCompact::pre_compact()
   DEBUG_ONLY(summary_data().verify_clear();)
 }
 
-void PSParallelCompact::post_compact()
-{
+void PSParallelCompact::post_compact() {
   GCTraceTime(Info, gc, phases) tm("Post Compact", &_gc_timer);
   ParCompactionManager::remove_all_shadow_regions();
 
@@ -655,18 +468,8 @@ void PSParallelCompact::post_compact()
   ClassLoaderDataGraph::clear_claimed_marks();
 
   for (unsigned int id = old_space_id; id < last_space_id; ++id) {
-    // Clear the marking bitmap, summary data and split info.
+    // Clear the marking bitmap and summary data.
     clear_data_covering_space(SpaceId(id));
-    {
-      MutableSpace* space = _space_info[id].space();
-      HeapWord* top = space->top();
-      HeapWord* new_top = _space_info[id].new_top();
-      if (ZapUnusedHeapArea && new_top < top) {
-        space->mangle_region(MemRegion(new_top, top));
-      }
-      // Update top().  Must be done after clearing the bitmap and summary data.
-      space->set_top(new_top);
-    }
   }
 
 #ifdef ASSERT
@@ -675,30 +478,45 @@ void PSParallelCompact::post_compact()
     summary_data().verify_clear();
   }
 #endif
+  ParallelScavengeHeap* heap = ParallelScavengeHeap::heap();
+
+  size_t assumed_live_bytes = pointer_delta(_old_space_new_top, heap->reserved_region().start(), sizeof(char));
+  // Adjust gen boundary after compaction completes
+  if (_should_right_shift_gen_boundary) {
+    GCTraceTime(Debug, gc, phases) tm_debug("Post Compact: Right shift Generation Boundary", &_gc_timer);
+    heap->right_shift_gen_boundary_after_full_gc(assumed_live_bytes);
+    clear_gen_boundary_shift();
+  } else if (heap->try_left_shift_gen_boundary_change(assumed_live_bytes)) {
+    // Nothing to do; all spaces are alreadyd initialized.
+  } else {
+    _space_info[eden_space_id].space()->clear(true);
+    _space_info[from_space_id].space()->clear(true);
+    _space_info[to_space_id].space()->clear(true);
+  }
+
+  {
+    // Only for old-gen (old-space)
+    MutableSpace* space = _space_info[old_space_id].space();
+    HeapWord* top = space->top();
+
+    MemRegion old_space_used_region = MemRegion{space->bottom(), top};
+    if (!old_space_used_region.is_empty()) {
+      heap->card_table()->clear_MemRegion(old_space_used_region);
+    }
+
+    HeapWord* new_top = _old_space_new_top;
+    assert(new_top <= space->end(), "inv");
+    if (ZapUnusedHeapArea && new_top < top) {
+      space->mangle_region(MemRegion(new_top, top));
+    }
+    space->set_top(new_top);
+  }
 
   ParCompactionManager::flush_all_string_dedup_requests();
 
-  MutableSpace* const eden_space = _space_info[eden_space_id].space();
-  MutableSpace* const from_space = _space_info[from_space_id].space();
-  MutableSpace* const to_space   = _space_info[to_space_id].space();
-
-  ParallelScavengeHeap* heap = ParallelScavengeHeap::heap();
-  bool eden_empty = eden_space->is_empty();
-
   // Update heap occupancy information which is used as input to the soft ref
   // clearing policy at the next gc.
-  Universe::heap()->update_capacity_and_used_at_gc();
-
-  bool young_gen_empty = eden_empty && from_space->is_empty() &&
-    to_space->is_empty();
-
-  PSCardTable* ct = heap->card_table();
-  MemRegion old_mr = heap->old_gen()->committed();
-  if (young_gen_empty) {
-    ct->clear_MemRegion(old_mr);
-  } else {
-    ct->dirty_MemRegion(old_mr);
-  }
+  heap->update_capacity_and_used_at_gc();
 
   heap->prune_scavengable_nmethods();
 
@@ -707,11 +525,12 @@ void PSParallelCompact::post_compact()
 #endif
 
   // Signal that we have completed a visit to all live objects.
-  Universe::heap()->record_whole_heap_examined_timestamp();
+  heap->record_whole_heap_examined_timestamp();
 }
 
 HeapWord* PSParallelCompact::compute_dense_prefix_for_old_space(MutableSpace* old_space,
-                                                                HeapWord* full_region_prefix_end) {
+                                                                HeapWord* full_region_prefix_end,
+                                                                size_t max_waste_bytes) {
   const size_t region_size = ParallelCompactData::RegionSize;
   const ParallelCompactData& sd = summary_data();
 
@@ -722,7 +541,7 @@ HeapWord* PSParallelCompact::compute_dense_prefix_for_old_space(MutableSpace* ol
   const RegionData* const end_region = sd.addr_to_region_ptr(old_space->top());
   assert(start_region <= end_region, "inv");
 
-  size_t max_waste = old_space->capacity_in_words() * (MarkSweepDeadRatio / 100.0);
+  size_t max_waste = max_waste_bytes / HeapWordSize;
   const RegionData* cur_region = start_region;
   for (/* empty */; cur_region < end_region; ++cur_region) {
     assert(region_size >= cur_region->data_size(), "inv");
@@ -740,7 +559,7 @@ HeapWord* PSParallelCompact::compute_dense_prefix_for_old_space(MutableSpace* ol
   return prefix_end;
 }
 
-void PSParallelCompact::fill_dense_prefix_end(SpaceId id) {
+void PSParallelCompact::fill_dense_prefix_end() {
   // Comparing two sizes to decide if filling is required:
   //
   // The size of the filler (min-obj-size) is 2 heap words with the default
@@ -758,9 +577,12 @@ void PSParallelCompact::fill_dense_prefix_end(SpaceId id) {
     return;
   }
 
+  // Only old-gen has dense-prefix.
+  SpaceId id = old_space_id;
   assert(!UseCompactObjectHeaders, "Compact headers can allocate small objects");
+
   assert(CollectedHeap::min_fill_size() == 2, "inv");
-  HeapWord* const dense_prefix_end = dense_prefix(id);
+  HeapWord* const dense_prefix_end = _old_space_dense_prefix;
   assert(_summary_data.is_region_aligned(dense_prefix_end), "precondition");
   assert(dense_prefix_end <= space(id)->top(), "precondition");
   if (dense_prefix_end == space(id)->top()) {
@@ -774,8 +596,9 @@ void PSParallelCompact::fill_dense_prefix_end(SpaceId id) {
     // The region after the dense prefix starts with live bytes.
     return;
   }
-
-  HeapWord* block_start = start_array(id)->block_start_reaching_into_card(dense_prefix_end);
+  ObjectStartArray* start_array = ParallelScavengeHeap::heap()->start_array();
+  assert(start_array != nullptr, "inv");
+  HeapWord* block_start = start_array->block_start_reaching_into_card(dense_prefix_end);
   if (block_start == dense_prefix_end - 1) {
     assert(!_mark_bitmap.is_marked(block_start), "inv");
     // There is exactly one heap word gap right before the dense prefix end, so we need a filler object.
@@ -787,8 +610,7 @@ void PSParallelCompact::fill_dense_prefix_end(SpaceId id) {
     _summary_data.addr_to_region_ptr(obj_beg)->add_live_obj(1);
     region_after_dense_prefix->set_partial_obj_size(1);
     region_after_dense_prefix->set_partial_obj_addr(obj_beg);
-    assert(start_array(id) != nullptr, "sanity");
-    start_array(id)->update_for_block(obj_beg, obj_beg + obj_len);
+    start_array->update_for_block(obj_beg, obj_beg + obj_len);
   }
 }
 
@@ -816,108 +638,111 @@ bool PSParallelCompact::check_maximum_compaction(bool should_do_max_compaction,
       || is_region_full;
 }
 
+void PSParallelCompact::summarize_spaces(size_t assumed_live_bytes) {
+  // old-space; skip dense-prefix
+  const MutableSpace* old_space = _space_info[old_space_id].space();
+  _old_space_new_top = _old_space_dense_prefix;
+  _summary_data.summarize(_old_space_dense_prefix,
+                          old_space->top(),
+                          &_old_space_new_top);
+
+
+  // Young-gen spaces. All live objects from young gen
+  // should fit into old gen after dynamic boundary adjustment.
+  for (uint id = first_young_gen_space_id; id < last_space_id; ++id) {
+    const MutableSpace* space = _space_info[id].space();
+    const size_t live_words = _space_info[id].live_words();
+    if (live_words > 0) {
+      // Move all live objects from young gen to old gen.
+      // Source: current space boundaries (unchanged until after compaction)
+      // Destination: old gen (where they will be after compaction)
+      _summary_data.summarize(space->bottom(),
+                              space->top(),
+                              &_old_space_new_top);
+    }
+  }
+#ifdef ASSERT
+  {
+    size_t used_words_after_gc = pointer_delta(_old_space_new_top,
+                                               _space_info[old_space_id].space()->bottom());
+    size_t used_bytes_after_gc = used_words_after_gc * HeapWordSize;
+    assert(assumed_live_bytes == used_bytes_after_gc, "inv");
+  }
+#endif
+}
+
 void PSParallelCompact::summary_phase(bool should_do_max_compaction)
 {
   GCTraceTime(Info, gc, phases) tm("Summary Phase", &_gc_timer);
 
-  MutableSpace* const old_space = _space_info[old_space_id].space();
+  PSOldGen* old_gen = ParallelScavengeHeap::heap()->old_gen();
+  MutableSpace* const old_space = old_gen->object_space();
+
+  const size_t max_waste_bytes = old_gen->reserved_size() * (MarkSweepDeadRatio / 100);
+  size_t total_live_words = 0;
+  // including waste if NOT max-compaction
+  size_t assumed_live_bytes = 0;
+
+  HeapWord* full_region_prefix_end = nullptr;
   {
-    size_t total_live_words = 0;
-    HeapWord* full_region_prefix_end = nullptr;
-    {
-      // old-gen
-      size_t live_words = _summary_data.live_words_in_space(old_space,
-                                                            &full_region_prefix_end);
-      total_live_words += live_words;
-    }
-    // young-gen
-    for (uint i = eden_space_id; i < last_space_id; ++i) {
-      const MutableSpace* space = _space_info[i].space();
-      size_t live_words = _summary_data.live_words_in_space(space);
-      total_live_words += live_words;
-      _space_info[i].set_new_top(space->bottom() + live_words);
-      _space_info[i].set_dense_prefix(space->bottom());
+    // old-gen
+    size_t live_words = _summary_data.live_words_in_space(old_space,
+                                                          &full_region_prefix_end);
+    _space_info[old_space_id].set_live_words(live_words);
+    total_live_words += live_words;
+  }
+
+  // young-gen
+  for (uint i = first_young_gen_space_id; i < last_space_id; ++i) {
+    const MutableSpace* space = _space_info[i].space();
+    size_t live_words = _summary_data.live_words_in_space(space);
+    total_live_words += live_words;
+    _space_info[i].set_live_words(live_words);
+  }
+
+  should_do_max_compaction = check_maximum_compaction(should_do_max_compaction,
+                                                      total_live_words,
+                                                      old_space,
+                                                      full_region_prefix_end);
+  {
+    GCTraceTime(Debug, gc, phases) tm_debug("Summary Phase: expand", &_gc_timer);
+    // Expand old-gen to fit all live objs and waste.
+    assumed_live_bytes = total_live_words * HeapWordSize;
+    if (!should_do_max_compaction) {
+      assumed_live_bytes += max_waste_bytes;
     }
 
-    should_do_max_compaction = check_maximum_compaction(should_do_max_compaction,
-                                                        total_live_words,
-                                                        old_space,
-                                                        full_region_prefix_end);
-    {
-      GCTraceTime(Info, gc, phases) tm("Summary Phase: expand", &_gc_timer);
-      // Try to expand old-gen in order to fit all live objs and waste.
-      size_t target_capacity_bytes = total_live_words * HeapWordSize
-                                   + old_space->capacity_in_bytes() * (MarkSweepDeadRatio / 100);
-      ParallelScavengeHeap::heap()->old_gen()->try_expand_till_size(target_capacity_bytes);
+    if (!old_gen->try_accommodate(assumed_live_bytes)) {
+      // Current max capacity is too small; need to right-shift gen boundary.
+      // We record necessary info but keeps existing gen-boundary for easy space-iteration during
+      // the following phases.
+      set_should_right_shift_gen_boundary();
+      // There are some bookkeeping data structures that need to be updated to reflect post-gc old-gen.
+      // 1. expand old-gen
+      // 2. obj-start array
+      // card-table is used solely for old-to-young pointers. Since young-gen is empty after full-gc,
+      // card-table is not really needed/used and we can update card-table afterwards.
+      old_gen->expand_to_reserved();
+      {
+        MemRegion mr{old_gen->reserved().start(),
+                     align_up(assumed_live_bytes, SpaceAlignment) / HeapWordSize};
+        old_gen->start_array()->set_covered_region(mr);
+      }
     }
+  }
 
-    HeapWord* dense_prefix_end = should_do_max_compaction
+  HeapWord* dense_prefix_end = should_do_max_compaction
                                  ? full_region_prefix_end
                                  : compute_dense_prefix_for_old_space(old_space,
-                                                                      full_region_prefix_end);
-    SpaceId id = old_space_id;
-    _space_info[id].set_dense_prefix(dense_prefix_end);
+                                                                      full_region_prefix_end,
+                                                                      max_waste_bytes);
+  _old_space_dense_prefix = dense_prefix_end;
 
-    if (dense_prefix_end != old_space->bottom()) {
-      fill_dense_prefix_end(id);
-    }
-
-    // Compacting objs in [dense_prefix_end, old_space->top())
-    _summary_data.summarize(_space_info[id].split_info(),
-                            dense_prefix_end, old_space->top(), nullptr,
-                            dense_prefix_end, old_space->end(),
-                            _space_info[id].new_top_addr());
+  if (dense_prefix_end != old_space->bottom()) {
+    fill_dense_prefix_end();
   }
 
-  // Summarize the remaining spaces in the young gen.  The initial target space
-  // is the old gen.  If a space does not fit entirely into the target, then the
-  // remainder is compacted into the space itself and that space becomes the new
-  // target.
-  SpaceId dst_space_id = old_space_id;
-  HeapWord* dst_space_end = old_space->end();
-  HeapWord** new_top_addr = _space_info[dst_space_id].new_top_addr();
-  for (unsigned int id = eden_space_id; id < last_space_id; ++id) {
-    const MutableSpace* space = _space_info[id].space();
-    const size_t live = pointer_delta(_space_info[id].new_top(),
-                                      space->bottom());
-    const size_t available = pointer_delta(dst_space_end, *new_top_addr);
-
-    if (live > 0 && live <= available) {
-      // All the live data will fit.
-      bool done = _summary_data.summarize(_space_info[id].split_info(),
-                                          space->bottom(), space->top(),
-                                          nullptr,
-                                          *new_top_addr, dst_space_end,
-                                          new_top_addr);
-      assert(done, "space must fit into old gen");
-
-      // Reset the new_top value for the space.
-      _space_info[id].set_new_top(space->bottom());
-    } else if (live > 0) {
-      // Attempt to fit part of the source space into the target space.
-      HeapWord* next_src_addr = nullptr;
-      bool done = _summary_data.summarize(_space_info[id].split_info(),
-                                          space->bottom(), space->top(),
-                                          &next_src_addr,
-                                          *new_top_addr, dst_space_end,
-                                          new_top_addr);
-      assert(!done, "space should not fit into old gen");
-      assert(next_src_addr != nullptr, "sanity");
-
-      // The source space becomes the new target, so the remainder is compacted
-      // within the space itself.
-      dst_space_id = SpaceId(id);
-      dst_space_end = space->end();
-      new_top_addr = _space_info[id].new_top_addr();
-      done = _summary_data.summarize(_space_info[id].split_info(),
-                                     next_src_addr, space->top(),
-                                     nullptr,
-                                     space->bottom(), dst_space_end,
-                                     new_top_addr);
-      assert(done, "space must fit when compacted into itself");
-      assert(*new_top_addr <= space->top(), "usage should not grow");
-    }
-  }
+  summarize_spaces(assumed_live_bytes);
 }
 
 void PSParallelCompact::report_object_count_after_gc() {
@@ -1048,7 +873,7 @@ bool PSParallelCompact::invoke(bool clear_all_soft_refs, bool should_do_max_comp
 
   _gc_timer.register_gc_end();
 
-  _gc_tracer.report_dense_prefix(dense_prefix(old_space_id));
+  _gc_tracer.report_dense_prefix(_old_space_dense_prefix);
   _gc_tracer.report_gc_end(_gc_timer.gc_end(), _gc_timer.time_partitions());
 
   return true;
@@ -1305,9 +1130,6 @@ void PSParallelCompact::adjust_in_space_helper(SpaceId id, Atomic<uint>* claim_c
 }
 
 void PSParallelCompact::adjust_in_old_space(Atomic<uint>* claim_counter) {
-  // Regions in old-space shouldn't be split.
-  assert(!_space_info[old_space_id].split_info().is_valid(), "inv");
-
   auto scan_obj_with_limit = [&] (HeapWord* obj_start, HeapWord* left, HeapWord* right) {
     assert(mark_bitmap()->is_marked(obj_start), "inv");
     oop obj = cast_to_oop(obj_start);
@@ -1352,7 +1174,7 @@ void PSParallelCompact::adjust_in_young_space(SpaceId id, Atomic<uint>* claim_co
 void PSParallelCompact::adjust_pointers_in_spaces(uint worker_id, Atomic<uint>* claim_counters) {
   auto start_time = Ticks::now();
   adjust_in_old_space(&claim_counters[0]);
-  for (uint id = eden_space_id; id < last_space_id; ++id) {
+  for (uint id = first_young_gen_space_id; id < last_space_id; ++id) {
     adjust_in_young_space(SpaceId(id), &claim_counters[id]);
   }
   log_trace(gc, phases)("adjust_pointers_in_spaces worker %u: %.3f ms", worker_id, (Ticks::now() - start_time).seconds() * 1000);
@@ -1472,6 +1294,7 @@ void PSParallelCompact::forward_to_new_addr() {
           return;
         }
         assert(mark_bitmap()->is_marked(cur_addr), "inv");
+        assert(new_addr <= cur_addr, "must forward to lower addr");
         oop obj = cast_to_oop(cur_addr);
         if (new_addr != cur_addr) {
           cm->preserved_marks()->push_if_necessary(obj, obj->mark());
@@ -1487,7 +1310,9 @@ void PSParallelCompact::forward_to_new_addr() {
       ParCompactionManager* cm = ParCompactionManager::gc_thread_compaction_manager(worker_id);
       for (uint id = old_space_id; id < last_space_id; ++id) {
         MutableSpace* sp = PSParallelCompact::space(SpaceId(id));
-        HeapWord* dense_prefix_addr = dense_prefix(SpaceId(id));
+        HeapWord* dense_prefix_addr = id == old_space_id
+                                    ? _old_space_dense_prefix
+                                    : sp->bottom();
         HeapWord* top = sp->top();
 
         if (dense_prefix_addr == top) {
@@ -1495,7 +1320,6 @@ void PSParallelCompact::forward_to_new_addr() {
           continue;
         }
 
-        const SplitInfo& split_info = _space_info[SpaceId(id)].split_info();
         size_t dense_prefix_region = _summary_data.addr_to_region_idx(dense_prefix_addr);
         size_t top_region = _summary_data.addr_to_region_idx(_summary_data.region_align_up(top));
         size_t start_region;
@@ -1515,19 +1339,8 @@ void PSParallelCompact::forward_to_new_addr() {
           HeapWord* region_start = _summary_data.region_to_addr(cur_region);
           HeapWord* region_end = region_start + ParallelCompactData::RegionSize;
 
-          if (split_info.is_split(cur_region)) {
-            // Part 1: will be relocated to space-1
-            HeapWord* preceding_destination = split_info.preceding_destination();
-            HeapWord* split_point = split_info.split_point();
-            forward_objs_in_range(cm, region_start + partial_obj_size, split_point, preceding_destination + partial_obj_size);
-
-            // Part 2: will be relocated to space-2
-            HeapWord* destination = region_ptr->destination();
-            forward_objs_in_range(cm, split_point, region_end, destination);
-          } else {
-            HeapWord* destination = region_ptr->destination();
-            forward_objs_in_range(cm, region_start + partial_obj_size, region_end, destination + partial_obj_size);
-          }
+          HeapWord* destination = region_ptr->destination();
+          forward_objs_in_range(cm, region_start + partial_obj_size, region_end, destination + partial_obj_size);
         }
       }
     }
@@ -1539,16 +1352,24 @@ void PSParallelCompact::forward_to_new_addr() {
 
 #ifdef ASSERT
 void PSParallelCompact::verify_forward() {
-  HeapWord* const old_dense_prefix_addr = dense_prefix(SpaceId(old_space_id));
+  HeapWord* const old_dense_prefix_addr = _old_space_dense_prefix;
+
+  HeapWord* heap_end = (HeapWord*) ParallelScavengeHeap::heap()->reserved_region().end();
+  if (old_dense_prefix_addr == heap_end) {
+    // The whole heap is 100% occupied with live objs. No moving, no forwarding.
+    return;
+  }
+
   // The destination addr for the first live obj after dense-prefix.
   HeapWord* bump_ptr = old_dense_prefix_addr
                      + _summary_data.addr_to_region_ptr(old_dense_prefix_addr)->partial_obj_size();
-  SpaceId bump_ptr_space = old_space_id;
 
   for (uint id = old_space_id; id < last_space_id; ++id) {
     MutableSpace* sp = PSParallelCompact::space(SpaceId(id));
     // Only verify objs after dense-prefix, because those before dense-prefix are not moved (forwarded).
-    HeapWord* cur_addr = dense_prefix(SpaceId(id));
+    HeapWord* cur_addr = id == old_space_id
+                       ? old_dense_prefix_addr
+                       : sp->bottom();
     HeapWord* top = sp->top();
 
     while (cur_addr < top) {
@@ -1557,12 +1378,7 @@ void PSParallelCompact::verify_forward() {
         break;
       }
       assert(mark_bitmap()->is_marked(cur_addr), "inv");
-      assert(bump_ptr <= _space_info[bump_ptr_space].new_top(), "inv");
-      // Move to the space containing cur_addr
-      if (bump_ptr == _space_info[bump_ptr_space].new_top()) {
-        bump_ptr = space(space_id(cur_addr))->bottom();
-        bump_ptr_space = space_id(bump_ptr);
-      }
+      assert(bump_ptr < _old_space_new_top, "inv");
       oop obj = cast_to_oop(cur_addr);
       if (cur_addr == bump_ptr) {
         assert(!FullGCForwarding::is_forwarded(obj), "inv");
@@ -1573,6 +1389,8 @@ void PSParallelCompact::verify_forward() {
       cur_addr += obj->size();
     }
   }
+
+  assert(bump_ptr == _old_space_new_top, "inv");
 }
 #endif
 
@@ -1619,6 +1437,8 @@ void PSParallelCompact::prepare_region_draining_tasks(uint parallel_gc_threads)
 {
   GCTraceTime(Trace, gc, phases) tm("Drain Task Setup", &_gc_timer);
 
+  ParCompactionManager::verify_all_region_stack_empty();
+
   // Find the threads that are active
   uint worker_id = 0;
 
@@ -1628,32 +1448,30 @@ void PSParallelCompact::prepare_region_draining_tasks(uint parallel_gc_threads)
 
   const ParallelCompactData& sd = PSParallelCompact::summary_data();
 
-  // id + 1 is used to test termination so unsigned  can
-  // be used with an old_space_id == 0.
   FillableRegionLogger region_logger;
-  for (unsigned int id = last_space_id - 1; id + 1 > old_space_id; --id) {
-    SpaceInfo* const space_info = _space_info + id;
-    HeapWord* const new_top = space_info->new_top();
+  // Populate region stack with regions that will contain live objs after full-gc,
+  // i.e. those regions serving as destinations.
+  HeapWord* const new_top = _old_space_new_top;
 
-    const size_t beg_region = sd.addr_to_region_idx(space_info->dense_prefix());
-    const size_t end_region =
-      sd.addr_to_region_idx(sd.region_align_up(new_top));
+  const size_t beg_region = sd.addr_to_region_idx(_old_space_dense_prefix);
+  const size_t end_region =
+    sd.addr_to_region_idx(sd.region_align_up(new_top));
 
-    for (size_t cur = end_region - 1; cur + 1 > beg_region; --cur) {
-      if (sd.region(cur)->claim_unsafe()) {
-        ParCompactionManager* cm = ParCompactionManager::gc_thread_compaction_manager(worker_id);
-        bool result = sd.region(cur)->mark_normal();
-        assert(result, "Must succeed at this point.");
-        cm->region_stack()->push(cur);
-        region_logger.handle(cur);
-        // Assign regions to tasks in round-robin fashion.
-        if (++worker_id == parallel_gc_threads) {
-          worker_id = 0;
-        }
+  // Populate with [beg_region, end_region)
+  for (size_t cur = end_region - 1; cur + 1 > beg_region; --cur) {
+    if (sd.region(cur)->claim_unsafe()) {
+      ParCompactionManager* cm = ParCompactionManager::gc_thread_compaction_manager(worker_id);
+      bool result = sd.region(cur)->mark_normal();
+      assert(result, "Must succeed at this point.");
+      cm->push_region(cur);
+      region_logger.handle(cur);
+      // Assign regions to tasks in round-robin fashion.
+      if (++worker_id == parallel_gc_threads) {
+        worker_id = 0;
       }
     }
-    region_logger.print_line();
   }
+  region_logger.print_line();
 }
 
 static void compaction_with_stealing_work(TaskTerminator* terminator, uint worker_id) {
@@ -1722,11 +1540,13 @@ void PSParallelCompact::fill_range_in_dense_prefix(HeapWord* start, HeapWord* en
   }
 #endif
 
+  ObjectStartArray* start_array = ParallelScavengeHeap::heap()->start_array();
+  assert(start_array != nullptr, "inv");
   CollectedHeap::fill_with_objects(start, pointer_delta(end, start));
   HeapWord* addr = start;
   do {
     size_t size = cast_to_oop(addr)->size();
-    start_array(old_space_id)->update_for_block(addr, addr + size);
+    start_array->update_for_block(addr, addr + size);
     addr += size;
   } while (addr < end);
 }
@@ -1735,7 +1555,7 @@ void PSParallelCompact::fill_dead_objs_in_dense_prefix() {
   ParMarkBitMap* bitmap = mark_bitmap();
 
   HeapWord* const bottom = _space_info[old_space_id].space()->bottom();
-  HeapWord* const prefix_end = dense_prefix(old_space_id);
+  HeapWord* const prefix_end = _old_space_dense_prefix;
 
   const size_t region_size = ParallelCompactData::RegionSize;
 
@@ -1796,10 +1616,7 @@ void PSParallelCompact::compact() {
 #ifdef  ASSERT
     verify_filler_in_dense_prefix();
 
-    // Verify that all regions have been processed.
-    for (unsigned int id = old_space_id; id < last_space_id; ++id) {
-      verify_complete(SpaceId(id));
-    }
+    verify_regions_after_compaction();
 #endif
   }
 }
@@ -1807,7 +1624,7 @@ void PSParallelCompact::compact() {
 #ifdef  ASSERT
 void PSParallelCompact::verify_filler_in_dense_prefix() {
   HeapWord* bottom = _space_info[old_space_id].space()->bottom();
-  HeapWord* dense_prefix_end = dense_prefix(old_space_id);
+  HeapWord* dense_prefix_end = _old_space_dense_prefix;
 
   const size_t region_size = ParallelCompactData::RegionSize;
 
@@ -1842,29 +1659,49 @@ void PSParallelCompact::verify_filler_in_dense_prefix() {
   }
 }
 
-void PSParallelCompact::verify_complete(SpaceId space_id) {
-  // All Regions served as compaction targets, from dense_prefix() to
-  // new_top(), should be marked as filled and all Regions between new_top()
-  // and top() should be available (i.e., should have been emptied).
+void PSParallelCompact::verify_regions_after_compaction() {
   ParallelCompactData& sd = summary_data();
-  SpaceInfo si = _space_info[space_id];
-  HeapWord* new_top_addr = sd.region_align_up(si.new_top());
-  HeapWord* old_top_addr = sd.region_align_up(si.space()->top());
-  const size_t beg_region = sd.addr_to_region_idx(si.dense_prefix());
-  const size_t new_top_region = sd.addr_to_region_idx(new_top_addr);
-  const size_t old_top_region = sd.addr_to_region_idx(old_top_addr);
+  {
+    // ## Old-gen
+    // All Regions served as compaction targets, from dense_prefix() to
+    // new_top(), should be marked as filled and all Regions between new_top()
+    // and top() should be available (i.e., should have been emptied).
+    SpaceInfo old_space_info = _space_info[old_space_id];
+    const size_t beg_region = sd.addr_to_region_idx(_old_space_dense_prefix);
+    const size_t new_top_region = sd.addr_to_region_idx(sd.region_align_up(_old_space_new_top));
+    const size_t old_top_region = sd.addr_to_region_idx(sd.region_align_up(old_space_info.space()->top()));
 
-  size_t cur_region;
-  for (cur_region = beg_region; cur_region < new_top_region; ++cur_region) {
-    const RegionData* const c = sd.region(cur_region);
-    assert(c->completed(), "region %zu not filled: destination_count=%u",
-           cur_region, c->destination_count());
+    size_t cur_region;
+    // [beg_region, new_top_region) must be completed (as compaction targets)
+    for (cur_region = beg_region; cur_region < new_top_region; ++cur_region) {
+      const RegionData* const c = sd.region(cur_region);
+      assert(c->completed(), "region %zu not filled: destination_count=%u",
+             cur_region, c->destination_count());
+    }
+
+    // [new_top_region, old_top_region) must be empty.
+    for (cur_region = new_top_region; cur_region < old_top_region; ++cur_region) {
+      const RegionData* const c = sd.region(cur_region);
+      assert(c->available(), "region %zu not empty: destination_count=%u",
+             cur_region, c->destination_count());
+    }
   }
+  {
+    // Young-gen
+    SpaceInfo first_space_info = _space_info[first_young_gen_space_id];
+    assert(sd.is_region_aligned(first_space_info.space()->bottom()), "inv");
+    const size_t old_gen_end_region = sd.addr_to_region_idx(sd.region_align_up(_old_space_new_top));
+    const size_t young_gen_start_region = sd.addr_to_region_idx(first_space_info.space()->bottom());
+    const size_t end_region = sd.addr_to_region_idx(sd.region_align_up(_space_info[last_space_id - 1].space()->top()));
 
-  for (cur_region = new_top_region; cur_region < old_top_region; ++cur_region) {
-    const RegionData* const c = sd.region(cur_region);
-    assert(c->available(), "region %zu not empty: destination_count=%u",
-           cur_region, c->destination_count());
+    // In case gen-boundary will be moved, use the larger one.
+    const size_t beg_region = MAX2(old_gen_end_region, young_gen_start_region);
+
+    for (size_t cur_region = beg_region; cur_region < end_region; ++cur_region) {
+      const RegionData* const c = sd.region(cur_region);
+      assert(c->available(), "region %zu not empty: destination_count=%u",
+             cur_region, c->destination_count());
+    }
   }
 }
 #endif  // #ifdef ASSERT
@@ -1881,7 +1718,6 @@ PSParallelCompact::SpaceId PSParallelCompact::space_id(HeapWord* addr) {
     }
   }
 
-  assert(false, "no space contains the addr");
   return last_space_id;
 }
 
@@ -1913,39 +1749,7 @@ HeapWord* PSParallelCompact::skip_live_words(HeapWord* beg, HeapWord* end, size_
 // Conversely, a source-region has a dest-region which holds the destination of
 // the first live word on this source-region, based on which the destination
 // for the rest of live words can be derived.
-//
-// Note:
-// There is some complication due to space-boundary-fragmentation (an obj can't
-// cross space-boundary) -- a source-region may be split and behave like two
-// distinct regions with their own dest-region, as depicted below.
-//
-// source-region: region-n
-//
-// **********************
-// |     A|A~~~~B|B     |
-// **********************
-//    n-1     n     n+1
-//
-// AA, BB denote two live objs. ~~~~ denotes unknown number of live objs.
-//
-// Assuming the dest-region for region-n is the final region before
-// old-space-end and its first-live-word is the middle of AA, the heap content
-// will look like the following after compaction:
-//
-// **************                  *************
-//      A|A~~~~ |                  |BB    |
-// **************                  *************
-//              ^                  ^
-//              | old-space-end    | eden-space-start
-//
-// Therefore, in this example, region-n will have two dest-regions:
-// 1. the final region in old-space
-// 2. the first region in eden-space.
-// To handle this special case, we introduce the concept of split-region, whose
-// contents are relocated to two spaces. `SplitInfo` captures all necessary
-// info about the split, the first part, spliting-point, and the second part.
 HeapWord* PSParallelCompact::first_src_addr(HeapWord* const dest_addr,
-                                            SpaceId src_space_id,
                                             size_t src_region_idx)
 {
   const size_t RegionSize = ParallelCompactData::RegionSize;
@@ -1963,17 +1767,7 @@ HeapWord* PSParallelCompact::first_src_addr(HeapWord* const dest_addr,
 
   // Identify the actual destination for the first live words on this region,
   // taking split-region into account.
-  HeapWord* region_start_destination;
-  const SplitInfo& split_info = _space_info[src_space_id].split_info();
-  if (split_info.is_split(src_region_idx)) {
-    // The second part of this split region; use the recorded split point.
-    if (dest_addr == src_region_destination) {
-      return split_info.split_point();
-    }
-    region_start_destination = split_info.preceding_destination();
-  } else {
-    region_start_destination = src_region_destination;
-  }
+  HeapWord* region_start_destination = src_region_destination;
 
   // Calculate the offset to be skipped
   size_t words_to_skip = pointer_delta(dest_addr, region_start_destination);
@@ -1986,11 +1780,7 @@ HeapWord* PSParallelCompact::first_src_addr(HeapWord* const dest_addr,
     result = skip_live_words(region_start + partial_obj_size, region_end, words_to_skip);
   }
 
-  if (split_info.is_split(src_region_idx)) {
-    assert(result < split_info.split_point(), "postcondition");
-  } else {
-    assert(result < region_end, "postcondition");
-  }
+  assert(result < region_end, "postcondition");
 
   return result;
 }
@@ -2014,8 +1804,8 @@ void PSParallelCompact::decrement_destination_counts(ParCompactionManager* cm,
   RegionData* const beg = sd.region(beg_region);
   RegionData* const end = sd.addr_to_region_ptr(sd.region_align_up(end_addr));
 
-  // Regions up to new_top() are enqueued if they become available.
-  HeapWord* const new_top = _space_info[src_space_id].new_top();
+  // Regions up to old-gen new_top() are enqueued if they become available.
+  HeapWord* const new_top = _old_space_new_top;
   RegionData* const enqueue_end =
     sd.addr_to_region_ptr(sd.region_align_up(new_top));
 
@@ -2115,8 +1905,9 @@ HeapWord* PSParallelCompact::partial_obj_end(HeapWord* region_start_addr) {
   return region_start_addr + accumulated_size;
 }
 
-// Use region_idx as the destination region, and evacuate all live objs on its
-// source regions to this destination region.
+// Use region_idx as the destination region, and identify the first source
+// region of it. Start evacuating all live objs on this source region and
+// continue with other source regions until this destination region is full.
 void PSParallelCompact::fill_region(ParCompactionManager* cm, MoveAndUpdateClosure& closure, size_t region_idx)
 {
   ParMarkBitMap* const bitmap = mark_bitmap();
@@ -2129,7 +1920,7 @@ void PSParallelCompact::fill_region(ParCompactionManager* cm, MoveAndUpdateClosu
   HeapWord* src_space_top = _space_info[src_space_id].space()->top();
   HeapWord* dest_addr = sd.region_to_addr(region_idx);
 
-  closure.set_source(first_src_addr(dest_addr, src_space_id, src_region_idx));
+  closure.set_source(first_src_addr(dest_addr, src_region_idx));
 
   // Adjust src_region_idx to prepare for decrementing destination counts (the
   // destination count is not decremented when a region is copied to itself).
@@ -2282,7 +2073,7 @@ bool PSParallelCompact::steal_unavailable_region(ParCompactionManager* cm, size_
 {
   size_t next = cm->next_shadow_region();
   ParallelCompactData& sd = summary_data();
-  size_t old_new_top = sd.addr_to_region_idx(_space_info[old_space_id].new_top());
+  size_t old_new_top = sd.addr_to_region_idx(_old_space_new_top);
   uint active_gc_threads = ParallelScavengeHeap::heap()->workers().active_workers();
 
   while (next < old_new_top) {
@@ -2311,12 +2102,13 @@ void PSParallelCompact::initialize_shadow_regions(uint parallel_gc_threads)
 {
   const ParallelCompactData& sd = PSParallelCompact::summary_data();
 
+  HeapWord* old_gen_new_top = _old_space_new_top;
   for (unsigned int id = old_space_id; id < last_space_id; ++id) {
     SpaceInfo* const space_info = _space_info + id;
     MutableSpace* const space = space_info->space();
 
     const size_t beg_region =
-      sd.addr_to_region_idx(sd.region_align_up(MAX2(space_info->new_top(), space->top())));
+      sd.addr_to_region_idx(sd.region_align_up(MAX2(old_gen_new_top, space->top())));
     const size_t end_region =
       sd.addr_to_region_idx(sd.region_align_down(space->end()));
 
@@ -2325,7 +2117,7 @@ void PSParallelCompact::initialize_shadow_regions(uint parallel_gc_threads)
     }
   }
 
-  size_t beg_region = sd.addr_to_region_idx(_space_info[old_space_id].dense_prefix());
+  size_t beg_region = sd.addr_to_region_idx(_old_space_dense_prefix);
   for (uint i = 0; i < parallel_gc_threads; i++) {
     ParCompactionManager *cm = ParCompactionManager::gc_thread_compaction_manager(i);
     cm->set_next_shadow_region(beg_region + i);

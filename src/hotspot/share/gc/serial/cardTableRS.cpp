@@ -49,7 +49,9 @@ void CardTableRS::scan_old_to_young_refs(TenuredGeneration* tg, HeapWord* saved_
 void CardTableRS::maintain_old_to_young_invariant(TenuredGeneration* old_gen,
                                                   bool is_young_gen_empty) {
   if (is_young_gen_empty) {
-    clear_MemRegion(old_gen->prev_used_region());
+    if (!old_gen->prev_used_region().is_empty()) {
+      clear_MemRegion(old_gen->prev_used_region());
+    }
   } else {
     MemRegion used_mr = old_gen->used_region();
     MemRegion prev_used_mr = old_gen->prev_used_region();

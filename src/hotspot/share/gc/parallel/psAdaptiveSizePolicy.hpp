@@ -90,6 +90,7 @@ class PSAdaptiveSizePolicy : public AdaptiveSizePolicy {
   uint compute_tenuring_threshold(bool is_survivor_overflowing,
                                   uint tenuring_threshold);
 
+  // todo: obsolete MinSurvivorRatio; suvivor can be grow as much as young-gen - min-eden-size
   // Return the maximum size of a survivor space if the young generation were of
   // size gen_size.
   size_t max_survivor_size(size_t gen_size) {

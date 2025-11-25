@@ -26,8 +26,7 @@
 #define SHARE_GC_PARALLEL_PSYOUNGGEN_HPP
 
 #include "gc/parallel/mutableSpace.hpp"
-#include "gc/parallel/objectStartArray.hpp"
-#include "gc/parallel/psVirtualspace.hpp"
+#include "gc/parallel/psHeapVirtualSpace.hpp"
 #include "gc/shared/generationCounters.hpp"
 #include "gc/shared/hSpaceCounters.hpp"
 
@@ -38,17 +37,12 @@ class PSYoungGen : public CHeapObj<mtGC> {
   friend class ParallelScavengeHeap;
 
  private:
-  MemRegion       _reserved;
-  PSVirtualSpace* _virtual_space;
+  PSHeapVirtualSpace* _heap_vs;
 
   // Spaces
   MutableSpace* _eden_space;
   MutableSpace* _from_space;
   MutableSpace* _to_space;
-
-  // Sizing information, in bytes, set in constructor
-  const size_t _min_gen_size;
-  const size_t _max_gen_size;
 
   // Performance counters
   GenerationCounters*   _gen_counters;
@@ -66,45 +60,54 @@ class PSYoungGen : public CHeapObj<mtGC> {
   void resize_spaces(size_t requested_eden_size,
                      size_t requested_survivor_size);
 
+  void reinit_to_from_layout_inner(size_t requested_eden_size,
+                                    size_t requested_survivor_size);
+
   // Try to expand eden to hold at least word_size.
   // Return true iff the expansion is successful.
   bool try_expand_to_hold(size_t word_size);
 
+  void expand_to_reserved();
+
   // Adjust the spaces to be consistent with the virtual space.
   void post_resize();
 
-  void initialize(ReservedSpace rs, size_t inital_size, size_t alignment);
   void initialize_work();
-  void initialize_virtual_space(ReservedSpace rs, size_t initial_size, size_t alignment);
-
-  void compute_desired_sizes(bool is_survivor_overflowing,
-                             size_t& eden_size,
-                             size_t& survivor_size);
 
   void resize_inner(size_t desired_eden_size,
                     size_t desired_survivor_size);
 
  public:
   // Initialize the generation.
-  PSYoungGen(ReservedSpace rs,
-             size_t initial_byte_size,
-             size_t minimum_byte_size,
-             size_t maximum_byte_size);
+  PSYoungGen(PSHeapVirtualSpace* vs, size_t initial_byte_size);
 
-  MemRegion reserved() const { return _reserved; }
+  MemRegion reserved() const {
+    return MemRegion((HeapWord*) _heap_vs->young_gen_low_addr(),
+                     (HeapWord*) _heap_vs->young_gen_high_addr());
+  }
+
+  MemRegion committed() const {
+    return MemRegion((HeapWord*) _heap_vs->young_gen_low_addr(),
+                     (HeapWord*) _heap_vs->young_gen_committed_high_addr());
+  }
+
+  size_t reserved_size() const { return reserved().byte_size(); }
+  size_t committed_size() const { return committed().byte_size(); }
+  size_t uncommitted_size() const { return reserved_size() - committed_size(); }
 
   bool is_in(const void* p) const {
-    return _virtual_space->is_in_committed(p);
+    return committed().contains(p);
   }
 
   bool is_in_reserved(const void* p) const {
-    return reserved().contains((void *)p);
+    return reserved().contains(p);
   }
+
+  void reinit_after_full_gc();
 
   MutableSpace*   eden_space() const    { return _eden_space; }
   MutableSpace*   from_space() const    { return _from_space; }
   MutableSpace*   to_space() const      { return _to_space; }
-  PSVirtualSpace* virtual_space() const { return _virtual_space; }
 
   // Called during/after GC
   void swap_spaces();
@@ -113,9 +116,13 @@ class PSYoungGen : public CHeapObj<mtGC> {
     return from_space()->bottom() < to_space()->bottom();
   }
 
-  void resize_after_young_gc(bool is_survivor_overflowing);
+  void resize(size_t desired_eden_size, size_t desired_survivor_size);
+  void try_resize(size_t desired_eden_size, size_t desired_survivor_size);
+  void reinit_to_from_layout(size_t desired_eden_size, size_t desired_survivor_size);
 
   // Size info
+  size_t max_capacity_in_bytes() const;
+
   size_t capacity_in_bytes() const;
   size_t used_in_bytes() const;
   size_t free_in_bytes() const;
@@ -123,9 +130,6 @@ class PSYoungGen : public CHeapObj<mtGC> {
   size_t capacity_in_words() const;
   size_t used_in_words() const;
   size_t free_in_words() const;
-
-  size_t min_gen_size() const { return _min_gen_size; }
-  size_t max_gen_size() const { return _max_gen_size; }
 
   // Allocation
   HeapWord* cas_allocate(size_t word_size) {

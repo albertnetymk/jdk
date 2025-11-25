@@ -59,7 +59,7 @@ public:
   size_t used_in_bytes()                    { return space()->used_in_bytes(); }
   size_t max_size() const {
     // Eden's max_size = max_size of Young Gen - the current committed size of survivor spaces
-    return _young_gen->max_gen_size() -
+    return _young_gen->reserved_size() -
            _young_gen->from_space()->capacity_in_bytes() -
            _young_gen->to_space()->capacity_in_bytes();
   }

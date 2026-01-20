@@ -31,6 +31,7 @@
 #include "opto/graphKit.hpp"
 #include "opto/idealKit.hpp"
 #include "opto/macro.hpp"
+#include "opto/rootnode.hpp"
 #include "utilities/macros.hpp"
 
 #define __ ideal.
@@ -224,4 +225,87 @@ void CardTableBarrierSetC2::eliminate_gc_barrier(PhaseMacroExpand* macro, Node* 
 bool CardTableBarrierSetC2::array_copy_requires_gc_barriers(bool tightly_coupled_alloc, BasicType type, bool is_clone, bool is_clone_instance, ArrayCopyPhase phase) const {
   bool is_oop = is_reference_type(type);
   return is_oop && (!tightly_coupled_alloc || !use_ReduceInitialCardMarks());
+}
+
+bool CardTableBarrierSetC2::expand_barriers(Compile* C, PhaseIterGVN& igvn) const {
+  ResourceMark rm;
+  VectorSet visited;
+  Unique_Node_List worklist;
+
+  // 1. BFS Traversal to find all tagged stores
+  worklist.push(C->root());
+  while (worklist.size() > 0) {
+    Node* n = worklist.pop();
+    if (visited.test_set(n->_idx)) {
+      continue;
+    }
+
+    if (n->is_Store() && (n->as_Store()->barrier_data() & CardTableBarrierPost)) {
+      StoreNode* store = n->as_Store();
+
+      // --- PART 1: REFINEMENT ---
+      // Check if the store value is NULL. If so, eliminate the barrier.
+      Node* val = store->in(MemNode::ValueIn);
+      if (igvn.type(val) == TypePtr::NULL_PTR) {
+        store->set_barrier_data(0);
+      } else {
+        // --- PART 2: EXPANSION (SPLICING) ---
+        expand_card_table_barrier(C, igvn, store);
+      }
+    }
+
+    // Standard BFS: push inputs
+    for (uint i = 0; i < n->req(); i++) {
+      if (n->in(i) != nullptr) {
+        worklist.push(n->in(i));
+      }
+    }
+  }
+  return false;
+}
+
+void CardTableBarrierSetC2::expand_card_table_barrier(Compile* C, PhaseIterGVN& igvn, StoreNode* store) const {
+  Node* ctrl = store->in(MemNode::Control);
+  Node* adr  = store->in(MemNode::Address);
+
+  // Clear barrier data to prevent re-processing
+  store->set_barrier_data(0);
+
+  // 1. Calculate Card Address: (Addr >> CardShift) + ByteMapBase
+  // Cast pointer to integer (X = long on 64-bit)
+  Node* cast = igvn.transform(new CastP2XNode(ctrl, adr));
+
+  // Shift the address
+  Node* shift = igvn.transform(new URShiftXNode(cast, igvn.intcon(CardTable::card_shift())));
+
+  // Add the Byte Map Base constant
+  Node* base = igvn.makecon(TypeRawPtr::make((address)ci_card_table_address()));
+  Node* card_adr = igvn.transform(new AddPNode(C->top(), base, shift));
+
+  // 2. Create the Card Mark (StoreB)
+  // Input memory is the original store. This ensures: StoreP -> StoreB
+  Node* zero = igvn.intcon(0);
+  Node* card_mark = igvn.transform(new StoreBNode(ctrl, store, card_adr, TypeRawPtr::BOTTOM, zero, MemNode::unordered));
+
+  // 3. Splice Memory Flow
+  // We must redirect all nodes that consumed 'store''s memory to consume 'card_mark' instead.
+  // This "splices" the card mark into the memory graph.
+  for (DUIterator_Last imin, i = store->last_outs(imin); i >= imin; --i) {
+    Node* use = store->last_out(i);
+
+    // We only want to replace the memory output (the store itself has no value result)
+    // We exclude the nodes we just created to avoid cycles.
+    if (use != card_mark && use != cast) {
+      bool replaced = false;
+      for (uint j = 0; j < use->req(); j++) {
+        if (use->in(j) == store) {
+          igvn.replace_input_of(use, j, card_mark);
+          replaced = true;
+        }
+      }
+      if (replaced) {
+        --i; // Adjust iterator for removed edge
+      }
+    }
+  }
 }

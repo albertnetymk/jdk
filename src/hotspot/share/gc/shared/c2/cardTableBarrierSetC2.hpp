@@ -45,7 +45,13 @@ protected:
 
   Node* byte_map_base_node(GraphKit* kit) const;
 
+  bool expand_barriers(Compile* C, PhaseIterGVN& igvn) const override;
+
+  void expand_card_table_barrier(Compile* C, PhaseIterGVN& igvn, StoreNode* store) const;
+
 public:
+  static constexpr uint8_t CardTableBarrierPost = 1;
+
   virtual void eliminate_gc_barrier(PhaseMacroExpand* macro, Node* node) const;
   virtual bool array_copy_requires_gc_barriers(bool tightly_coupled_alloc, BasicType type, bool is_clone, bool is_clone_instance, ArrayCopyPhase phase) const;
 

@@ -143,14 +143,7 @@
                                                                             \
   product(uint, ConcGCThreads, 0,                                           \
           "Number of threads concurrent gc will use")                       \
-                                                                            \
-  product(bool, AlwaysTenure, false,                                        \
-          "Always tenure objects in eden (ParallelGC only)")                \
-                                                                            \
-  product(bool, NeverTenure, false,                                         \
-          "Never tenure objects in eden, may tenure on overflow "           \
-          "(ParallelGC only)")                                              \
-                                                                            \
+                                                                             \
   product(bool, ExplicitGCInvokesConcurrent, false,                         \
           "A System.gc() request invokes a concurrent collection; "         \
           "(effective only when using concurrent collectors)")              \

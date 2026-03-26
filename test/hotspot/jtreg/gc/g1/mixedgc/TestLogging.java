@@ -55,7 +55,7 @@ public class TestLogging {
             "-XX:+UnlockDiagnosticVMOptions",
             "-XX:+WhiteBoxAPI",
             "-Xms10M", "-Xmx10M", "-XX:NewSize=2M", "-XX:MaxNewSize=2M",
-            "-XX:+AlwaysTenure", // surviving promote objects immediately
+            "-XX:MaxTenuringThreshold=0", // surviving promote objects immediately
             "-XX:InitiatingHeapOccupancyPercent=100", // set initial CMC threshold and disable adaptive IHOP
             "-XX:-G1UseAdaptiveIHOP",                 // to avoid additional concurrent cycles caused by ergonomics
             "-XX:G1MixedGCCountTarget=4",

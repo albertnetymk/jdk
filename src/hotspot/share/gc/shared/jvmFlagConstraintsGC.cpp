@@ -192,16 +192,6 @@ JVMFlag::Error MaxTenuringThresholdConstraintFunc(uint value, bool verbose) {
   }
 #endif
 
-  // MaxTenuringThreshold=0 means NeverTenure=false && AlwaysTenure=true
-  if ((value == 0) && (NeverTenure || !AlwaysTenure)) {
-    JVMFlag::printError(verbose,
-                        "MaxTenuringThreshold (0) should match to NeverTenure=false "
-                        "&& AlwaysTenure=true. But we have NeverTenure=%s "
-                        "AlwaysTenure=%s\n",
-                        NeverTenure ? "true" : "false",
-                        AlwaysTenure ? "true" : "false");
-    return JVMFlag::VIOLATES_CONSTRAINT;
-  }
   return JVMFlag::SUCCESS;
 }
 

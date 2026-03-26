@@ -69,7 +69,7 @@ public class TestIHOPErgo {
         "-XX:G1HeapRegionSize=1m",
         "-XX:+G1UseAdaptiveIHOP",
         "-Xlog:gc+ihop=debug,gc+ihop+ergo=debug,gc+ergo=debug",
-        "-XX:+AlwaysTenure",
+        "-XX:MaxTenuringThreshold=0",
         "-XX:G1AdaptiveIHOPNumInitialSamples=1",
         "-XX:InitiatingHeapOccupancyPercent=30"
     };

@@ -153,9 +153,6 @@ void ZArguments::initialize() {
 
   if (!FLAG_IS_DEFAULT(ZTenuringThreshold) && ZTenuringThreshold != -1) {
     FLAG_SET_ERGO_IF_DEFAULT(MaxTenuringThreshold, (uint)ZTenuringThreshold);
-    if (MaxTenuringThreshold == 0) {
-      FLAG_SET_ERGO_IF_DEFAULT(AlwaysTenure, true);
-    }
   }
 
   if (FLAG_IS_DEFAULT(MaxTenuringThreshold)) {
@@ -168,14 +165,6 @@ void ZArguments::initialize() {
       }
     }
     FLAG_SET_DEFAULT(MaxTenuringThreshold, tenuring_threshold);
-    if (tenuring_threshold == 0 && FLAG_IS_DEFAULT(AlwaysTenure)) {
-      // Some flag constraint function says AlwaysTenure must be true iff MaxTenuringThreshold == 0
-      FLAG_SET_DEFAULT(AlwaysTenure, true);
-    }
-  }
-
-  if (!FLAG_IS_DEFAULT(ZTenuringThreshold) && NeverTenure) {
-    vm_exit_during_initialization(err_msg("ZTenuringThreshold and NeverTenure are incompatible"));
   }
 
   // Large page size must match granule size

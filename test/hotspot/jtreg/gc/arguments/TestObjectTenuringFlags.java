@@ -26,10 +26,9 @@ package gc.arguments;
 /*
  * @test TestObjectTenuringFlags
  * @bug 6521376
- * @requires vm.gc.Parallel & vm.opt.NeverTenure == null & vm.opt.AlwaysTenure == null
- *           & vm.opt.MaxTenuringThreshold == null & vm.opt.InitialTenuringThreshold == null
- * @summary Tests argument processing for NeverTenure, AlwaysTenure,
- * and MaxTenuringThreshold
+ * @requires vm.gc.Parallel
+ * @requires vm.opt.MaxTenuringThreshold == null & vm.opt.InitialTenuringThreshold == null
+ * @summary Tests argument processing for InitialTenuringThreshold and MaxTenuringThreshold
  * @library /test/lib
  * @library /
  * @modules java.base/jdk.internal.misc
@@ -47,94 +46,53 @@ public class TestObjectTenuringFlags {
     runTenuringFlagsConsistencyTest(
         new String[]{},
         false /* shouldFail */,
-        new ExpectedTenuringFlags(false /* alwaysTenure */, false /* neverTenure */, 7, 15));
+        new ExpectedTenuringFlags(7, 15));
 
     // valid cases
     runTenuringFlagsConsistencyTest(
-        new String[]{"-XX:+NeverTenure"},
-        false /* shouldFail */,
-        new ExpectedTenuringFlags(false /* alwaysTenure */, true /* neverTenure */, 7, 16));
-
-    runTenuringFlagsConsistencyTest(
-        new String[]{"-XX:+AlwaysTenure"},
-        false /* shouldFail */,
-        new ExpectedTenuringFlags(true /* alwaysTenure */, false /* neverTenure */, 0, 0));
-
-    runTenuringFlagsConsistencyTest(
         new String[]{"-XX:MaxTenuringThreshold=0"},
         false /* shouldFail */,
-        new ExpectedTenuringFlags(true /* alwaysTenure */, false /* neverTenure */, 0, 0));
+        new ExpectedTenuringFlags(0, 0));
 
     runTenuringFlagsConsistencyTest(
         new String[]{"-XX:MaxTenuringThreshold=5"},
         false /* shouldFail */,
-        new ExpectedTenuringFlags(false /* alwaysTenure */, false /* neverTenure */, 5, 5));
+        new ExpectedTenuringFlags(5, 5));
 
     runTenuringFlagsConsistencyTest(
         new String[]{"-XX:MaxTenuringThreshold=10"},
         false /* shouldFail */,
-        new ExpectedTenuringFlags(false /* alwaysTenure */, false /* neverTenure */, 7, 10));
+        new ExpectedTenuringFlags(7, 10));
 
     runTenuringFlagsConsistencyTest(
         new String[]{"-XX:MaxTenuringThreshold=15"},
         false /* shouldFail */,
-        new ExpectedTenuringFlags(false /* alwaysTenure */, false /* neverTenure */, 7, 15));
+        new ExpectedTenuringFlags(7, 15));
 
     runTenuringFlagsConsistencyTest(
         new String[]{"-XX:MaxTenuringThreshold=16"},
         false /* shouldFail */,
-        new ExpectedTenuringFlags(false /* alwaysTenure */, false /* neverTenure */, 7, 16));
+        new ExpectedTenuringFlags(7, 16));
 
     runTenuringFlagsConsistencyTest(
         new String[]{"-XX:InitialTenuringThreshold=0"},
         false /* shouldFail */,
-        new ExpectedTenuringFlags(false /* alwaysTenure */, false /* neverTenure */, 0, 15));
+        new ExpectedTenuringFlags(0, 15));
 
     runTenuringFlagsConsistencyTest(
         new String[]{"-XX:InitialTenuringThreshold=5"},
         false /* shouldFail */,
-        new ExpectedTenuringFlags(false /* alwaysTenure */, false /* neverTenure */, 5, 15));
+        new ExpectedTenuringFlags(5, 15));
 
     runTenuringFlagsConsistencyTest(
         new String[]{"-XX:InitialTenuringThreshold=10"},
         false /* shouldFail */,
-        new ExpectedTenuringFlags(false /* alwaysTenure */, false /* neverTenure */, 10, 15));
+        new ExpectedTenuringFlags(10, 15));
 
     runTenuringFlagsConsistencyTest(
         new String[]{"-XX:InitialTenuringThreshold=15"},
         false /* shouldFail */,
-        new ExpectedTenuringFlags(false /* alwaysTenure */, false /* neverTenure */, 15, 15));
-
-    // "Last option wins" cases
-    runTenuringFlagsConsistencyTest(
-        new String[]{"-XX:+AlwaysTenure", "-XX:+NeverTenure"},
-        false /* shouldFail */,
-        new ExpectedTenuringFlags(false /* alwaysTenure */, true /* neverTenure */, 7, 16));
-
-    runTenuringFlagsConsistencyTest(
-        new String[]{"-XX:+NeverTenure", "-XX:+AlwaysTenure"},
-        false /* shouldFail */,
-        new ExpectedTenuringFlags(true /* alwaysTenure */, false /* neverTenure */, 0, 0));
-
-    runTenuringFlagsConsistencyTest(
-        new String[]{"-XX:MaxTenuringThreshold=16", "-XX:+AlwaysTenure"},
-        false /* shouldFail */,
-        new ExpectedTenuringFlags(true /* alwaysTenure */, false /* neverTenure */, 0, 0));
-
-    runTenuringFlagsConsistencyTest(
-        new String[]{"-XX:+AlwaysTenure", "-XX:MaxTenuringThreshold=16"},
-        false /* shouldFail */,
-        new ExpectedTenuringFlags(false /* alwaysTenure */, false /* neverTenure */, 7, 16));
-
-    runTenuringFlagsConsistencyTest(
-        new String[]{"-XX:MaxTenuringThreshold=0", "-XX:+NeverTenure"},
-        false /* shouldFail */,
-        new ExpectedTenuringFlags(false /* alwaysTenure */, true /* neverTenure */, 7, 16));
-
-    runTenuringFlagsConsistencyTest(
-        new String[]{"-XX:+NeverTenure", "-XX:MaxTenuringThreshold=0"},
-        false /* shouldFail */,
-        new ExpectedTenuringFlags(true /* alwaysTenure */, false /* neverTenure */, 0, 0));
+        new ExpectedTenuringFlags(15, 15));
 
     // Illegal cases
     runTenuringFlagsConsistencyTest(
@@ -174,18 +132,6 @@ public class TestObjectTenuringFlags {
   }
 
   private static void checkTenuringFlagsConsistency(String output, ExpectedTenuringFlags expectedFlags) {
-    if (expectedFlags.alwaysTenure != FlagsValue.getFlagBoolValue("AlwaysTenure", output)) {
-      throw new RuntimeException(
-            "Actual flag AlwaysTenure " + FlagsValue.getFlagBoolValue("AlwaysTenure", output) +
-            " is not equal to expected flag AlwaysTenure " + expectedFlags.alwaysTenure);
-    }
-
-    if (expectedFlags.neverTenure != FlagsValue.getFlagBoolValue("NeverTenure", output)) {
-      throw new RuntimeException(
-            "Actual flag NeverTenure " + FlagsValue.getFlagBoolValue("NeverTenure", output) +
-            " is not equal to expected flag NeverTenure " + expectedFlags.neverTenure);
-    }
-
     if (expectedFlags.initialTenuringThreshold != FlagsValue.getFlagLongValue("InitialTenuringThreshold", output)) {
       throw new RuntimeException(
             "Actual flag InitialTenuringThreshold " + FlagsValue.getFlagLongValue("InitialTenuringThreshold", output) +
@@ -201,17 +147,11 @@ public class TestObjectTenuringFlags {
 }
 
 class ExpectedTenuringFlags {
-    public boolean alwaysTenure;
-    public boolean neverTenure;
     public long initialTenuringThreshold;
     public long maxTenuringThreshold;
 
-    public ExpectedTenuringFlags(boolean alwaysTenure,
-            boolean neverTenure,
-            long initialTenuringThreshold,
+    public ExpectedTenuringFlags(long initialTenuringThreshold,
             long maxTenuringThreshold) {
-      this.alwaysTenure = alwaysTenure;
-      this.neverTenure = neverTenure;
       this.initialTenuringThreshold = initialTenuringThreshold;
       this.maxTenuringThreshold = maxTenuringThreshold;
     }

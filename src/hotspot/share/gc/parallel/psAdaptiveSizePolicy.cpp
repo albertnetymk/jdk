@@ -248,10 +248,8 @@ uint PSAdaptiveSizePolicy::compute_tenuring_threshold(bool is_survivor_overflowi
   // Finally, increment or decrement the tenuring threshold, as decided above.
   // We test for decrementing first, as we might have hit the target size
   // limit.
-  if (!(AlwaysTenure || NeverTenure)) {
-    if (incr_tenuring_threshold && tenuring_threshold < MaxTenuringThreshold) {
-      tenuring_threshold++;
-    }
+  if (incr_tenuring_threshold && tenuring_threshold < MaxTenuringThreshold) {
+    tenuring_threshold++;
   }
 
   return tenuring_threshold;

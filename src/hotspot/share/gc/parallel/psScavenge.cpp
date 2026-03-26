@@ -340,9 +340,6 @@ bool PSScavenge::invoke(bool clear_soft_refs) {
   heap->print_before_gc();
   heap->trace_heap_before_gc(&_gc_tracer);
 
-  assert(!NeverTenure || _tenuring_threshold == markWord::max_age + 1, "Sanity");
-  assert(!AlwaysTenure || _tenuring_threshold == 0, "Sanity");
-
   // Fill in TLABs
   heap->ensure_parsability(true);  // retire TLABs
 
@@ -524,15 +521,9 @@ void PSScavenge::set_young_generation_boundary(HeapWord* v) {
 void PSScavenge::initialize() {
   // Arguments must have been parsed
 
-  if (AlwaysTenure || NeverTenure) {
-    assert(MaxTenuringThreshold == 0 || MaxTenuringThreshold == markWord::max_age + 1,
-           "MaxTenuringThreshold should be 0 or markWord::max_age + 1, but is %d", (int) MaxTenuringThreshold);
-    _tenuring_threshold = MaxTenuringThreshold;
-  } else {
-    // We want to smooth out our startup times for the AdaptiveSizePolicy
-    _tenuring_threshold = (UseAdaptiveSizePolicy) ? InitialTenuringThreshold :
-                                                    MaxTenuringThreshold;
-  }
+  // We want to smooth out our startup times for the AdaptiveSizePolicy
+  _tenuring_threshold = (UseAdaptiveSizePolicy) ? InitialTenuringThreshold :
+                                                  MaxTenuringThreshold;
 
   ParallelScavengeHeap* heap = ParallelScavengeHeap::heap();
   PSYoungGen* young_gen = heap->young_gen();

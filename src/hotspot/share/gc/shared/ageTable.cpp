@@ -86,25 +86,17 @@ void AgeTable::merge(const AgeTable* subTable) {
 }
 
 uint AgeTable::compute_tenuring_threshold(size_t desired_survivor_size) {
-  uint result;
-
-  if (AlwaysTenure || NeverTenure) {
-    assert(MaxTenuringThreshold == 0 || MaxTenuringThreshold == markWord::max_age + 1,
-           "MaxTenuringThreshold should be 0 or markWord::max_age + 1, but is %u", MaxTenuringThreshold);
-    result = MaxTenuringThreshold;
-  } else {
-    size_t total = 0;
-    uint age = 1;
-    assert(sizes[0] == 0, "no objects with age zero should be recorded");
-    while (age < table_size) {
-      total += sizes[age];
-      // check if including objects of age 'age' made us pass the desired
-      // size, if so 'age' is the new threshold
-      if (total > desired_survivor_size) break;
-      age++;
-    }
-    result = age < MaxTenuringThreshold ? age : MaxTenuringThreshold;
+  size_t total = 0;
+  uint age = 1;
+  assert(sizes[0] == 0, "no objects with age zero should be recorded");
+  while (age < table_size) {
+    total += sizes[age];
+    // check if including objects of age 'age' made us pass the desired
+    // size, if so 'age' is the new threshold
+    if (total > desired_survivor_size) break;
+    age++;
   }
+  const uint result = age < MaxTenuringThreshold ? age : MaxTenuringThreshold;
 
 
   log_debug(gc, age)("Desired survivor size %zu bytes, new threshold %zu (max threshold %u)",

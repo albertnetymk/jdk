@@ -2663,55 +2663,6 @@ jint Arguments::parse_each_vm_init_arg(const JavaVMInitArgs* args, JVMFlagOrigin
       _exit_hook = CAST_TO_FN_PTR(exit_hook_t, option->extraInfo);
     } else if (match_option(option, "abort")) {
       _abort_hook = CAST_TO_FN_PTR(abort_hook_t, option->extraInfo);
-    // Need to keep consistency of MaxTenuringThreshold and AlwaysTenure/NeverTenure;
-    // and the last option wins.
-    } else if (match_option(option, "-XX:+NeverTenure")) {
-      if (FLAG_SET_CMDLINE(NeverTenure, true) != JVMFlag::SUCCESS) {
-        return JNI_EINVAL;
-      }
-      if (FLAG_SET_CMDLINE(AlwaysTenure, false) != JVMFlag::SUCCESS) {
-        return JNI_EINVAL;
-      }
-      if (FLAG_SET_CMDLINE(MaxTenuringThreshold, markWord::max_age + 1) != JVMFlag::SUCCESS) {
-        return JNI_EINVAL;
-      }
-    } else if (match_option(option, "-XX:+AlwaysTenure")) {
-      if (FLAG_SET_CMDLINE(NeverTenure, false) != JVMFlag::SUCCESS) {
-        return JNI_EINVAL;
-      }
-      if (FLAG_SET_CMDLINE(AlwaysTenure, true) != JVMFlag::SUCCESS) {
-        return JNI_EINVAL;
-      }
-      if (FLAG_SET_CMDLINE(MaxTenuringThreshold, 0) != JVMFlag::SUCCESS) {
-        return JNI_EINVAL;
-      }
-    } else if (match_option(option, "-XX:MaxTenuringThreshold=", &tail)) {
-      uint max_tenuring_thresh = 0;
-      if (!parse_uint(tail, &max_tenuring_thresh, 0)) {
-        jio_fprintf(defaultStream::error_stream(),
-                    "Improperly specified VM option \'MaxTenuringThreshold=%s\'\n", tail);
-        return JNI_EINVAL;
-      }
-
-      if (FLAG_SET_CMDLINE(MaxTenuringThreshold, max_tenuring_thresh) != JVMFlag::SUCCESS) {
-        return JNI_EINVAL;
-      }
-
-      if (MaxTenuringThreshold == 0) {
-        if (FLAG_SET_CMDLINE(NeverTenure, false) != JVMFlag::SUCCESS) {
-          return JNI_EINVAL;
-        }
-        if (FLAG_SET_CMDLINE(AlwaysTenure, true) != JVMFlag::SUCCESS) {
-          return JNI_EINVAL;
-        }
-      } else {
-        if (FLAG_SET_CMDLINE(NeverTenure, false) != JVMFlag::SUCCESS) {
-          return JNI_EINVAL;
-        }
-        if (FLAG_SET_CMDLINE(AlwaysTenure, false) != JVMFlag::SUCCESS) {
-          return JNI_EINVAL;
-        }
-      }
     } else if (match_option(option, "-XX:+DisplayVMOutputToStderr")) {
       if (FLAG_SET_CMDLINE(DisplayVMOutputToStdout, false) != JVMFlag::SUCCESS) {
         return JNI_EINVAL;

@@ -42,8 +42,8 @@ public class MixedGCProvoker {
 
     /**
      * Allocate a few objects that are supposed to end up in the old generation as they are held live by the
-     * given array. Caller must make sure by running this test with e.g. -XX:+AlwaysTenure that the objects
-     * to actually be tenured.
+     * given array. Caller must make sure by running this test with e.g. -XX:MaxTenuringThreshold=0
+     * that the objects are actually tenured.
      * Mixes live and dead objects, allocating about two regions worth of objects.
      * @param liveOldObjects Array receiving the live objects after this method.
      * @param g1HeapRegionSize Size of a G1 heap region.
@@ -64,7 +64,7 @@ public class MixedGCProvoker {
             toUnreachable.add(new byte[arraySize]);
         });
 
-        // Do one young collection, AlwaysTenure will force promotion.
+        // Do one young collection, MaxTenuringThreshold=0 will force promotion.
         getWhiteBox().youngGC();
 
         // Check it is promoted & keep alive

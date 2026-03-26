@@ -39,7 +39,7 @@ import jdk.test.lib.jfr.Events;
  * @requires vm.gc == "G1" | vm.gc == null
  * @requires vm.flagless
  * @library /test/lib /test/jdk
- * @run main/othervm -XX:NewSize=2m -XX:MaxNewSize=2m -Xmx32m -XX:+UseG1GC -XX:+NeverTenure jdk.jfr.event.gc.detailed.TestTenuringDistributionEvent
+ * @run main/othervm -XX:NewSize=2m -XX:MaxNewSize=2m -Xmx32m -XX:+UseG1GC -XX:MaxTenuringThreshold=16 jdk.jfr.event.gc.detailed.TestTenuringDistributionEvent
  */
 
 public class TestTenuringDistributionEvent {

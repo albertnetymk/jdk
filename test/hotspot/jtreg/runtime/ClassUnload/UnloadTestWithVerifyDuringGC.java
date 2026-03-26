@@ -33,7 +33,7 @@
  * @library classes
  * @build jdk.test.whitebox.WhiteBox test.Empty
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
- * @run main/othervm -Xbootclasspath/a:. -Xmn8m -XX:+UseG1GC -XX:+UnlockDiagnosticVMOptions -XX:+VerifyDuringGC -XX:+AlwaysTenure -XX:+WhiteBoxAPI -Xlog:gc,class+unload=debug UnloadTestWithVerifyDuringGC
+ * @run main/othervm -Xbootclasspath/a:. -Xmn8m -XX:+UseG1GC -XX:+UnlockDiagnosticVMOptions -XX:+VerifyDuringGC -XX:MaxTenuringThreshold=0 -XX:+WhiteBoxAPI -Xlog:gc,class+unload=debug UnloadTestWithVerifyDuringGC
  */
 import jdk.test.whitebox.WhiteBox;
 import jdk.test.lib.classloader.ClassUnloadCommon;

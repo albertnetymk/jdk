@@ -105,36 +105,52 @@ public class TestObjectTenuringFlags {
         false /* shouldFail */,
         new ExpectedTenuringFlags(false /* alwaysTenure */, false /* neverTenure */, 15, 15));
 
-    // "Last option wins" cases
+    // Conflicting cases should fail
     runTenuringFlagsConsistencyTest(
         new String[]{"-XX:+AlwaysTenure", "-XX:+NeverTenure"},
-        false /* shouldFail */,
-        new ExpectedTenuringFlags(false /* alwaysTenure */, true /* neverTenure */, 7, 16));
-
-    runTenuringFlagsConsistencyTest(
-        new String[]{"-XX:+NeverTenure", "-XX:+AlwaysTenure"},
-        false /* shouldFail */,
-        new ExpectedTenuringFlags(true /* alwaysTenure */, false /* neverTenure */, 0, 0));
-
-    runTenuringFlagsConsistencyTest(
-        new String[]{"-XX:MaxTenuringThreshold=16", "-XX:+AlwaysTenure"},
-        false /* shouldFail */,
-        new ExpectedTenuringFlags(true /* alwaysTenure */, false /* neverTenure */, 0, 0));
+        true /* shouldFail */,
+        new ExpectedTenuringFlags());
 
     runTenuringFlagsConsistencyTest(
         new String[]{"-XX:+AlwaysTenure", "-XX:MaxTenuringThreshold=16"},
-        false /* shouldFail */,
-        new ExpectedTenuringFlags(false /* alwaysTenure */, false /* neverTenure */, 7, 16));
+        true /* shouldFail */,
+        new ExpectedTenuringFlags());
 
     runTenuringFlagsConsistencyTest(
-        new String[]{"-XX:MaxTenuringThreshold=0", "-XX:+NeverTenure"},
+        new String[]{"-XX:+NeverTenure", "-XX:MaxTenuringThreshold=0"},
+        true /* shouldFail */,
+        new ExpectedTenuringFlags());
+
+    runTenuringFlagsConsistencyTest(
+        new String[]{"-XX:-AlwaysTenure", "-XX:MaxTenuringThreshold=0"},
+        true /* shouldFail */,
+        new ExpectedTenuringFlags());
+
+    // Equivalent combinations should still work
+    runTenuringFlagsConsistencyTest(
+        new String[]{"-XX:+AlwaysTenure", "-XX:MaxTenuringThreshold=0"},
+        false /* shouldFail */,
+        new ExpectedTenuringFlags(true /* alwaysTenure */, false /* neverTenure */, 0, 0));
+
+    runTenuringFlagsConsistencyTest(
+        new String[]{"-XX:+NeverTenure", "-XX:MaxTenuringThreshold=16"},
         false /* shouldFail */,
         new ExpectedTenuringFlags(false /* alwaysTenure */, true /* neverTenure */, 7, 16));
 
     runTenuringFlagsConsistencyTest(
-        new String[]{"-XX:+NeverTenure", "-XX:MaxTenuringThreshold=0"},
+        new String[]{"-XX:-AlwaysTenure", "-XX:+NeverTenure"},
+        false /* shouldFail */,
+        new ExpectedTenuringFlags(false /* alwaysTenure */, true /* neverTenure */, 7, 16));
+
+    runTenuringFlagsConsistencyTest(
+        new String[]{"-XX:-NeverTenure", "-XX:+AlwaysTenure"},
         false /* shouldFail */,
         new ExpectedTenuringFlags(true /* alwaysTenure */, false /* neverTenure */, 0, 0));
+
+    runTenuringFlagsConsistencyTest(
+        new String[]{"-XX:-NeverTenure", "-XX:MaxTenuringThreshold=16"},
+        false /* shouldFail */,
+        new ExpectedTenuringFlags(false /* alwaysTenure */, false /* neverTenure */, 7, 16));
 
     // Illegal cases
     runTenuringFlagsConsistencyTest(

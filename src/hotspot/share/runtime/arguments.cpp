@@ -1818,6 +1818,37 @@ bool Arguments::check_vm_args_consistency() {
     status = false;
   }
 
+  const bool always_tenure_cmdline = FLAG_IS_CMDLINE(AlwaysTenure);
+  const bool never_tenure_cmdline = FLAG_IS_CMDLINE(NeverTenure);
+  const bool max_tenuring_threshold_cmdline = FLAG_IS_CMDLINE(MaxTenuringThreshold);
+  const int tenuring_flags_count =
+      (always_tenure_cmdline ? 1 : 0) +
+      (never_tenure_cmdline ? 1 : 0) +
+      (max_tenuring_threshold_cmdline ? 1 : 0);
+
+  // Three valid states:
+  //  1) AlwaysTenure=false, NeverTenure=false, MaxTenuringThreshold in [1,16]
+  //  2) AlwaysTenure=true,  NeverTenure=false, MaxTenuringThreshold == 0
+  //  3) AlwaysTenure=false, NeverTenure=true,  MaxTenuringThreshold == markWord::max_age + 1
+  if (tenuring_flags_count > 1) {
+    bool valid_state = (!AlwaysTenure && !NeverTenure && MaxTenuringThreshold > 0 && MaxTenuringThreshold <= markWord::max_age + 1) ||
+                       (AlwaysTenure && !NeverTenure && MaxTenuringThreshold == 0) ||
+                       (!AlwaysTenure && NeverTenure && MaxTenuringThreshold == (markWord::max_age + 1));
+
+    if (!valid_state) {
+      jio_fprintf(defaultStream::error_stream(),
+                  "Conflicting tenuring options (Y/N == cmdline): "
+                  "AlwaysTenure=%s (%c), NeverTenure=%s (%c), MaxTenuringThreshold=%u (%c) is not a valid combination\n",
+                   AlwaysTenure ? "true" : "false",
+                   always_tenure_cmdline ? 'Y' : 'N',
+                   NeverTenure ? "true" : "false",
+                   never_tenure_cmdline ? 'Y' : 'N',
+                   MaxTenuringThreshold,
+                   max_tenuring_threshold_cmdline ? 'Y' : 'N');
+      status = false;
+    }
+  }
+
   status = CompilerConfig::check_args_consistency(status);
 #if INCLUDE_JVMCI
   if (status && EnableJVMCI) {
@@ -2661,27 +2692,26 @@ jint Arguments::parse_each_vm_init_arg(const JavaVMInitArgs* args, JVMFlagOrigin
       _exit_hook = CAST_TO_FN_PTR(exit_hook_t, option->extraInfo);
     } else if (match_option(option, "abort")) {
       _abort_hook = CAST_TO_FN_PTR(abort_hook_t, option->extraInfo);
-    // Need to keep consistency of MaxTenuringThreshold and AlwaysTenure/NeverTenure;
-    // and the last option wins.
+    // Need to keep consistency of MaxTenuringThreshold and AlwaysTenure/NeverTenure.
     } else if (match_option(option, "-XX:+NeverTenure")) {
       if (FLAG_SET_CMDLINE(NeverTenure, true) != JVMFlag::SUCCESS) {
         return JNI_EINVAL;
       }
-      if (FLAG_SET_CMDLINE(AlwaysTenure, false) != JVMFlag::SUCCESS) {
-        return JNI_EINVAL;
+      if (!FLAG_IS_CMDLINE(AlwaysTenure)) {
+        FLAG_SET_ERGO(AlwaysTenure, false);
       }
-      if (FLAG_SET_CMDLINE(MaxTenuringThreshold, markWord::max_age + 1) != JVMFlag::SUCCESS) {
-        return JNI_EINVAL;
+      if (!FLAG_IS_CMDLINE(MaxTenuringThreshold)) {
+        FLAG_SET_ERGO(MaxTenuringThreshold, markWord::max_age + 1);
       }
     } else if (match_option(option, "-XX:+AlwaysTenure")) {
-      if (FLAG_SET_CMDLINE(NeverTenure, false) != JVMFlag::SUCCESS) {
-        return JNI_EINVAL;
+      if (!FLAG_IS_CMDLINE(NeverTenure)) {
+        FLAG_SET_ERGO(NeverTenure, false);
       }
       if (FLAG_SET_CMDLINE(AlwaysTenure, true) != JVMFlag::SUCCESS) {
         return JNI_EINVAL;
       }
-      if (FLAG_SET_CMDLINE(MaxTenuringThreshold, 0) != JVMFlag::SUCCESS) {
-        return JNI_EINVAL;
+      if (!FLAG_IS_CMDLINE(MaxTenuringThreshold)) {
+        FLAG_SET_ERGO(MaxTenuringThreshold, 0);
       }
     } else if (match_option(option, "-XX:MaxTenuringThreshold=", &tail)) {
       uint max_tenuring_thresh = 0;
@@ -2696,18 +2726,18 @@ jint Arguments::parse_each_vm_init_arg(const JavaVMInitArgs* args, JVMFlagOrigin
       }
 
       if (MaxTenuringThreshold == 0) {
-        if (FLAG_SET_CMDLINE(NeverTenure, false) != JVMFlag::SUCCESS) {
-          return JNI_EINVAL;
+        if (!FLAG_IS_CMDLINE(NeverTenure)) {
+          FLAG_SET_ERGO(NeverTenure, false);
         }
-        if (FLAG_SET_CMDLINE(AlwaysTenure, true) != JVMFlag::SUCCESS) {
-          return JNI_EINVAL;
+        if (!FLAG_IS_CMDLINE(AlwaysTenure)) {
+          FLAG_SET_ERGO(AlwaysTenure, true);
         }
       } else {
-        if (FLAG_SET_CMDLINE(NeverTenure, false) != JVMFlag::SUCCESS) {
-          return JNI_EINVAL;
+        if (!FLAG_IS_CMDLINE(NeverTenure)) {
+          FLAG_SET_ERGO(NeverTenure, false);
         }
-        if (FLAG_SET_CMDLINE(AlwaysTenure, false) != JVMFlag::SUCCESS) {
-          return JNI_EINVAL;
+        if (!FLAG_IS_CMDLINE(AlwaysTenure)) {
+          FLAG_SET_ERGO(AlwaysTenure, false);
         }
       }
     } else if (match_option(option, "-XX:+DisplayVMOutputToStderr")) {

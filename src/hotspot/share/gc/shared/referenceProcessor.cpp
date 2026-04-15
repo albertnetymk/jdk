@@ -297,31 +297,67 @@ void DiscoveredListIterator::complete_enqueue() {
   }
 }
 
-inline void log_preclean_ref(const DiscoveredListIterator& iter, const char* reason) {
-  if (log_develop_is_enabled(Trace, gc, ref)) {
-    ResourceMark rm;
-    log_develop_trace(gc, ref)("Precleaning %s reference " PTR_FORMAT ": %s",
-                               reason, p2i(iter.obj()),
-                               iter.obj()->klass()->internal_name());
+inline void log_ref_with_referent(outputStream* st, oop ref, oop referent) {
+  ResourceMark rm;
+  st->print(" " PTR_FORMAT ": %s", p2i(ref), ref->klass()->internal_name());
+  if (referent != nullptr) {
+    Klass* k;
+    {
+      markWord m = referent->mark();
+      if (m.is_forwarded()) {
+        k = referent->forwardee(m)->klass();
+      } else {
+        k = referent->klass();
+      }
+    }
+    st->print(", referent " PTR_FORMAT ": %s", p2i(referent), k->internal_name());
+  } else {
+    st->print(", referent null");
   }
+  st->cr();
+}
+
+inline void log_ref_with_action(const char* prefix, const char* reason, const DiscoveredListIterator& iter) {
+  if (log_develop_is_enabled(Trace, gc, ref)) {
+    LogStreamHandle(Trace, gc, ref) ls;
+    ls.print("%s %s reference", prefix, reason);
+    log_ref_with_referent(&ls, iter.obj(), iter.referent());
+  }
+}
+
+inline void log_preclean_ref(const DiscoveredListIterator& iter, const char* reason) {
+  log_ref_with_action("Precleaning", reason, iter);
 }
 
 inline void log_dropped_ref(const DiscoveredListIterator& iter, const char* reason) {
-  if (log_develop_is_enabled(Trace, gc, ref)) {
-    ResourceMark rm;
-    log_develop_trace(gc, ref)("Dropping %s reference " PTR_FORMAT ": %s",
-                               reason, p2i(iter.obj()),
-                               iter.obj()->klass()->internal_name());
-  }
+  log_ref_with_action("Dropping", reason, iter);
 }
 
 inline void log_enqueued_ref(const DiscoveredListIterator& iter, const char* reason) {
-  if (log_develop_is_enabled(Trace, gc, ref)) {
-    ResourceMark rm;
-    log_develop_trace(gc, ref)("Enqueue %s reference (" PTR_FORMAT ": %s)",
-                               reason, p2i(iter.obj()), iter.obj()->klass()->internal_name());
-  }
+  log_ref_with_action("Enqueue", reason, iter);
   assert(oopDesc::is_oop(iter.obj()), "Adding a bad reference");
+}
+
+inline void log_discovered_ref(oop obj, bool added, bool is_discovery_mt) {
+  if (log_develop_is_enabled(Trace, gc, ref)) {
+    LogStreamHandle(Trace, gc, ref) ls;
+    if (added) {
+      ls.print("Discovered reference (%s)", is_discovery_mt ? "mt" : "st");
+    } else {
+      ls.print("Contended discovered reference");
+    }
+    oop referent = java_lang_ref_Reference::unknown_referent_no_keepalive(obj);
+    log_ref_with_referent(&ls, obj, referent);
+  }
+}
+
+inline void log_already_discovered_ref(oop obj) {
+  if (log_develop_is_enabled(Trace, gc, ref)) {
+    LogStreamHandle(Trace, gc, ref) ls;
+    ls.print("Already discovered reference");
+    oop referent = java_lang_ref_Reference::unknown_referent_no_keepalive(obj);
+    log_ref_with_referent(&ls, obj, referent);
+  }
 }
 
 size_t ReferenceProcessor::process_discovered_list_work(DiscoveredList&    refs_list,
@@ -842,12 +878,9 @@ inline void ReferenceProcessor::add_to_discovered_list(DiscoveredList& refs_list
     // We can always add the object without synchronization: every thread has its
     // own list head.
     refs_list.add_as_head(obj);
-    log_develop_trace(gc, ref)("Discovered reference (%s) (" PTR_FORMAT ": %s)",
-                               discovery_is_mt() ? "mt" : "st", p2i(obj), obj->klass()->internal_name());
-  } else {
-    log_develop_trace(gc, ref)("Already discovered reference (mt) (" PTR_FORMAT ": %s)",
-                               p2i(obj), obj->klass()->internal_name());
   }
+
+  log_discovered_ref(obj, added, discovery_is_mt());
 }
 
 inline bool ReferenceProcessor::set_discovered_link_st(HeapWord* discovered_addr,
@@ -955,8 +988,7 @@ bool ReferenceProcessor::discover_reference(oop obj, ReferenceType rt) {
   assert(oopDesc::is_oop_or_null(discovered), "Expected an oop or null for discovered field at " PTR_FORMAT, p2i(discovered));
   if (discovered != nullptr) {
     // The reference has already been discovered...
-    log_develop_trace(gc, ref)("Already discovered reference (" PTR_FORMAT ": %s)",
-                               p2i(obj), obj->klass()->internal_name());
+    log_already_discovered_ref(obj);
 
     // Encountering an already-discovered non-strong ref because G1 can restart
     // concurrent marking on marking-stack overflow. Must continue to treat

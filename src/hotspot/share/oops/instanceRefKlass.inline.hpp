@@ -31,6 +31,7 @@
 #include "gc/shared/referenceProcessor.hpp"
 #include "logging/log.hpp"
 #include "logging/logStream.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/access.inline.hpp"
 #include "oops/instanceKlass.inline.hpp"
 #include "oops/oop.inline.hpp"
@@ -63,11 +64,37 @@ static inline oop load_referent(oop obj, ReferenceType type) {
   }
 }
 
+inline void log_encountered_reference(oop obj, oop referent) {
+  if (log_develop_is_enabled(Trace, gc, ref)) {
+    ResourceMark rm;
+    LogStreamHandle(Trace, gc, ref) ls;
+    ls.print("Encountered reference " PTR_FORMAT ": %s",
+             p2i(obj), obj->klass()->internal_name());
+    if (referent != nullptr) {
+      Klass* k;
+      {
+        markWord m = referent->mark();
+        if (m.is_forwarded()) {
+          k = referent->forwardee(m)->klass();
+        } else {
+          k = referent->klass();
+        }
+      }
+      ls.print(", referent " PTR_FORMAT ": %s",
+               p2i(referent), k->internal_name());
+    } else {
+      ls.print(", referent null");
+    }
+    ls.cr();
+  }
+}
+
 template <typename T, class OopClosureType>
 bool InstanceRefKlass::try_discover(oop obj, ReferenceType type, OopClosureType* closure) {
   ReferenceDiscoverer* rd = closure->ref_discoverer();
   if (rd != nullptr) {
     oop referent = load_referent(obj, type);
+    log_encountered_reference(obj, referent);
     if (referent != nullptr) {
       if (!referent->is_gc_marked()) {
         // Only try to discover if not yet marked.

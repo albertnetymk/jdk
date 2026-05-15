@@ -429,18 +429,6 @@ ParallelCompactData::is_region_aligned(HeapWord* addr) const
   return (size_t(addr) & RegionAddrOffsetMask) == 0;
 }
 
-// Abstract closure for use with ParMarkBitMap::iterate(), which will invoke the
-// do_addr() method.
-//
-// The closure is initialized with the number of heap words to process
-// (words_remaining()), and becomes 'full' when it reaches 0.  The do_addr()
-// methods in subclasses should update the total as words are processed.  Since
-// only one subclass actually uses this mechanism to terminate iteration, the
-// default initial value is > 0.  The implementation is here and not in the
-// single subclass that uses it to avoid making is_full() virtual, and thus
-// adding a virtual call per live object.
-
-
 // The Parallel collector is a stop-the-world garbage collector that
 // does parts of the collection using parallel threads.  The collection includes
 // the tenured generation and the young generation.
@@ -625,6 +613,7 @@ private:
 
   static void adjust_pointers();
   static void forward_to_new_addr();
+  static void pack_live_prefixes();
 
   static void verify_forward() NOT_DEBUG_RETURN;
   static void verify_filler_in_dense_prefix() NOT_DEBUG_RETURN;
@@ -649,7 +638,10 @@ public:
   static bool invoke(bool clear_all_soft_refs, bool should_do_max_compaction);
 
   template<typename Func>
-  static void adjust_in_space_helper(SpaceId id, Atomic<uint>* claim_counter, Func&& on_stripe);
+  static void iterate_addr_range_stripes(HeapWord* start,
+                                         HeapWord* end,
+                                         Atomic<uint>* claim_counter,
+                                         Func&& on_stripe);
 
   static void adjust_in_old_space(Atomic<uint>* claim_counter);
 
@@ -680,34 +672,7 @@ public:
   static inline MutableSpace*     space(SpaceId space_id);
 
   static HeapWord* old_space_new_top() { return _old_space_new_top; }
-
-  // Return the address of the count + 1st live word in the range [beg, end).
-  static HeapWord* skip_live_words(HeapWord* beg, HeapWord* end, size_t count);
-
-  // Return the address of the word to be copied to dest_addr, which must be
-  // aligned to a region boundary.
-  static HeapWord* first_src_addr(HeapWord* const dest_addr,
-                                  size_t src_region_idx);
-
-  // Determine the next source region, set closure.source() to the start of the
-  // new region return the region index.  Parameter end_addr is the address one
-  // beyond the end of source range just processed.  If necessary, switch to a
-  // new source space and set src_space_id (in-out parameter) and src_space_top
-  // (out parameter) accordingly.
-  static size_t next_src_region(MoveAndUpdateClosure& closure,
-                                SpaceId& src_space_id,
-                                HeapWord*& src_space_top,
-                                HeapWord* end_addr);
-
-  // Decrement the destination count for each non-empty source region in the
-  // range [beg_region, region(region_align_up(end_addr))).  If the destination
-  // count for a region goes to 0 and it needs to be filled, enqueue it.
-  static void decrement_destination_counts(ParCompactionManager* cm,
-                                           SpaceId src_space_id,
-                                           size_t beg_region,
-                                           HeapWord* end_addr);
-
-  static HeapWord* partial_obj_end(HeapWord* region_start_addr);
+  static HeapWord* old_space_dense_prefix() { return _old_space_dense_prefix; }
 
   static void fill_region(ParCompactionManager* cm, MoveAndUpdateClosure& closure, size_t region);
   static void fill_and_update_region(ParCompactionManager* cm, size_t region);
@@ -728,9 +693,6 @@ public:
 
   static STWGCTimer* gc_timer() { return &_gc_timer; }
 
-  // Return the SpaceId for the given address.
-  static SpaceId space_id(HeapWord* addr);
-
   static void print_on(outputStream* st);
 
 #ifdef  ASSERT
@@ -741,16 +703,16 @@ public:
 #endif  // #ifdef ASSERT
 };
 
+// Helper used by the compaction phase to copy packed live words into a
+// destination region.  The closure is full when the destination region has
+// received all words up to old_space_new_top().
 class MoveAndUpdateClosure: public StackObj {
 private:
-  ParMarkBitMap* const        _bitmap;
   size_t                      _words_remaining; // Words left to copy.
   static inline size_t calculate_words_remaining(size_t region);
 
 protected:
-  HeapWord*               _source;          // Next addr that would be read.
   HeapWord*               _destination;     // Next addr to be written.
-  ObjectStartArray* const _start_array;
   size_t                  _offset;
 
   inline void decrement_words_remaining(size_t words);
@@ -758,30 +720,18 @@ protected:
   inline void update_state(size_t words);
 
 public:
-  ParMarkBitMap*        bitmap() const { return _bitmap; }
-
   size_t    words_remaining()    const { return _words_remaining; }
   bool      is_full()            const { return _words_remaining == 0; }
-  HeapWord* source()             const { return _source; }
-  void      set_source(HeapWord* addr) {
-    assert(addr != nullptr, "precondition");
-    _source = addr;
-  }
 
-  // If the object will fit (size <= words_remaining()), copy it to the current
-  // destination, update the interior oops and the start array.
-  void do_addr(HeapWord* addr, size_t words);
-
-  inline MoveAndUpdateClosure(ParMarkBitMap* bitmap, size_t region);
+  inline MoveAndUpdateClosure(size_t region);
 
   // Accessors.
   HeapWord* destination() const         { return _destination; }
   HeapWord* copy_destination() const    { return _destination + _offset; }
 
-  // Copy enough words to fill this closure or to the end of an object,
-  // whichever is smaller, starting at source(). The start array is not
-  // updated.
-  void copy_partial_obj(size_t partial_obj_size);
+  // Copy packed live words. Object-level metadata has already been updated
+  // before the packed-prefix compaction path reaches this point.
+  void copy_words(HeapWord* src, size_t words);
 
   virtual void complete_region(HeapWord* dest_addr, PSParallelCompact::RegionData* region_ptr);
 };
@@ -798,35 +748,22 @@ inline size_t MoveAndUpdateClosure::calculate_words_remaining(size_t region) {
               ParallelCompactData::RegionSize);
 }
 
-static ObjectStartArray* start_array_for_addr(void* addr) {
-  assert(addr != PSParallelCompact::old_space_new_top(), "precondition");
-
-  ParallelScavengeHeap* heap = ParallelScavengeHeap::heap();
-  return addr < PSParallelCompact::old_space_new_top()
-       ? heap->start_array()
-       : nullptr;
-}
-
 inline
-MoveAndUpdateClosure::MoveAndUpdateClosure(ParMarkBitMap* bitmap, size_t region_idx) :
-  _bitmap(bitmap),
+MoveAndUpdateClosure::MoveAndUpdateClosure(size_t region_idx) :
   _words_remaining(calculate_words_remaining(region_idx)),
-  _source(nullptr),
   _destination(PSParallelCompact::summary_data().region_to_addr(region_idx)),
-  _start_array(start_array_for_addr(_destination)),
   _offset(0) {}
 
 inline void MoveAndUpdateClosure::update_state(size_t words)
 {
   decrement_words_remaining(words);
-  _source += words;
   _destination += words;
 }
 
 class MoveAndUpdateShadowClosure: public MoveAndUpdateClosure {
   inline size_t calculate_shadow_offset(size_t region_idx, size_t shadow_idx);
 public:
-  inline MoveAndUpdateShadowClosure(ParMarkBitMap* bitmap, size_t region, size_t shadow);
+  inline MoveAndUpdateShadowClosure(size_t region, size_t shadow);
 
   virtual void complete_region(HeapWord* dest_addr, PSParallelCompact::RegionData* region_ptr);
 
@@ -842,8 +779,8 @@ inline size_t MoveAndUpdateShadowClosure::calculate_shadow_offset(size_t region_
 }
 
 inline
-MoveAndUpdateShadowClosure::MoveAndUpdateShadowClosure(ParMarkBitMap* bitmap, size_t region, size_t shadow) :
-  MoveAndUpdateClosure(bitmap, region),
+MoveAndUpdateShadowClosure::MoveAndUpdateShadowClosure(size_t region, size_t shadow) :
+  MoveAndUpdateClosure(region),
   _shadow(shadow) {
   _offset = calculate_shadow_offset(region, shadow);
 }

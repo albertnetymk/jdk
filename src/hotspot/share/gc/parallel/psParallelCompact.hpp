@@ -750,7 +750,6 @@ private:
 protected:
   HeapWord*               _source;          // Next addr that would be read.
   HeapWord*               _destination;     // Next addr to be written.
-  ObjectStartArray* const _start_array;
   size_t                  _offset;
 
   inline void decrement_words_remaining(size_t words);
@@ -798,18 +797,12 @@ inline size_t MoveAndUpdateClosure::calculate_words_remaining(size_t region) {
               ParallelCompactData::RegionSize);
 }
 
-static ObjectStartArray* start_array_for_addr(void* addr) {
-  assert(addr < PSParallelCompact::old_space_new_top(), "precondition");
-  return ParallelScavengeHeap::heap()->start_array();
-}
-
 inline
 MoveAndUpdateClosure::MoveAndUpdateClosure(ParMarkBitMap* bitmap, size_t region_idx) :
   _bitmap(bitmap),
   _words_remaining(calculate_words_remaining(region_idx)),
   _source(nullptr),
   _destination(PSParallelCompact::summary_data().region_to_addr(region_idx)),
-  _start_array(start_array_for_addr(_destination)),
   _offset(0) {}
 
 inline void MoveAndUpdateClosure::update_state(size_t words)

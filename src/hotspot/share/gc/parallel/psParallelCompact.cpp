@@ -297,6 +297,9 @@ void ParallelCompactData::summarize(HeapWord* source_beg,
     if (dest_region_1 != dest_region_2) {
       // Destination regions differ; adjust destination_count.
       destination_count += 1;
+      assert(is_region_aligned(dest_addr) || dest_region_1 == 0 ||
+             _region_data[dest_region_1].source_region() != 0,
+             "destination region start should already have a source");
       // Data from cur_region will be copied to the start of dest_region_2.
       _region_data[dest_region_2].set_source_region(cur_region);
     } else if (is_region_aligned(dest_addr)) {
@@ -1287,6 +1290,7 @@ void PSParallelCompact::forward_to_new_addr() {
                                       HeapWord* destination) {
       HeapWord* cur_addr = start;
       HeapWord* new_addr = destination;
+      ObjectStartArray* const start_array = ParallelScavengeHeap::heap()->start_array();
 
       while (cur_addr < end) {
         cur_addr = mark_bitmap()->find_obj_beg(cur_addr, end);
@@ -1301,6 +1305,8 @@ void PSParallelCompact::forward_to_new_addr() {
           FullGCForwarding::forward_to(obj, cast_to_oop(new_addr));
         }
         size_t obj_size = obj->size();
+        assert(new_addr < PSParallelCompact::old_space_new_top(), "all live objects should compact into old-gen");
+        start_array->update_for_block(new_addr, new_addr + obj_size);
         new_addr += obj_size;
         cur_addr += obj_size;
       }
@@ -1329,17 +1335,19 @@ void PSParallelCompact::forward_to_new_addr() {
                                  &start_region, &end_region);
         for (size_t cur_region = start_region; cur_region < end_region; ++cur_region) {
           RegionData* region_ptr = _summary_data.region(cur_region);
-          size_t partial_obj_size = region_ptr->partial_obj_size();
-
-          if (partial_obj_size == ParallelCompactData::RegionSize) {
-            // No obj-start
+          if (region_ptr->live_obj_size() == 0) {
+            // Empty
             continue;
           }
+
+          size_t partial_obj_size = region_ptr->partial_obj_size();
+          assert(partial_obj_size != ParallelCompactData::RegionSize, "should have early-returned");
 
           HeapWord* region_start = _summary_data.region_to_addr(cur_region);
           HeapWord* region_end = region_start + ParallelCompactData::RegionSize;
 
           HeapWord* destination = region_ptr->destination();
+          assert(destination != nullptr, "non-empty forward region must have destination");
           forward_objs_in_range(cm, region_start + partial_obj_size, region_end, destination + partial_obj_size);
         }
       }
@@ -2145,11 +2153,6 @@ void MoveAndUpdateClosure::complete_region(HeapWord* dest_addr, PSParallelCompac
 void MoveAndUpdateClosure::do_addr(HeapWord* addr, size_t words) {
   assert(destination() != nullptr, "sanity");
   _source = addr;
-
-  // The start_array must be updated even if the object is not moving.
-  if (_start_array != nullptr) {
-    _start_array->update_for_block(destination(), destination() + words);
-  }
 
   // Avoid overflow
   words = MIN2(words, words_remaining());

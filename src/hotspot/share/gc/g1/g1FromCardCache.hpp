@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,75 +25,109 @@
 #ifndef SHARE_GC_G1_G1FROMCARDCACHE_HPP
 #define SHARE_GC_G1_G1FROMCARDCACHE_HPP
 
-#include "memory/allStatic.hpp"
-#include "utilities/ostream.hpp"
+#include "utilities/debug.hpp"
+#include "utilities/globalDefinitions.hpp"
 
-// G1FromCardCache remembers the most recently processed card on the heap on
-// a per-region and per-thread basis.
-class G1FromCardCache : public AllStatic {
-private:
-  // Array of card indices. Indexed by heap region (rows) and thread (columns) to minimize
-  // thread contention.
-  // This order minimizes the time to clear all entries for a given region during region
-  // freeing. I.e. a single clear of a single memory area instead of multiple separate
-  // accesses with a large stride per region.
-  static uintptr_t** _cache;
-  static uint _max_reserved_regions;
-  static size_t _static_mem_size;
-#ifdef ASSERT
-  static uint _max_workers;
-
-  static void check_bounds(uint worker_id, uint region_idx) {
-    assert(worker_id < _max_workers, "Worker_id %u is larger than maximum %u", worker_id, _max_workers);
-    assert(region_idx < _max_reserved_regions, "Region_idx %u is larger than maximum %u", region_idx, _max_reserved_regions);
-  }
-#endif
-
-  // This card index indicates "no card for that entry" yet. This allows us to use the OS
-  // lazy backing of memory with zero-filled pages to avoid initial actual memory use.
-  // This means that the heap must not contain card zero.
-  static const uintptr_t InvalidCard = 0;
-
-  // Gives an approximation on how many threads can be expected to add records to
-  // a remembered set in parallel. This is used for sizing the G1FromCardCache to
-  // decrease performance losses due to data structure sharing.
-  // Examples for quantities that influence this value are the maximum number of
-  // mutator threads, maximum number of concurrent refinement or GC threads.
-  static uint num_par_rem_sets();
-
+// G1FromCardCache remembers which destination cardsets have been
+// encountered while a worker scans the current source card.
+//
+// Lookup is split into three tiers: a single-id fast path for the common case of
+// a source card referencing only one cardset, a direct-mapped table, and one
+// overflow slot for ids colliding in that table. Ids that collide beyond the
+// overflow slot are reported as not present, so the cache is not an exact filter.
+// That is always safe: the pair is simply handed to the cardset again, which
+// dedups on its own. In exchange, lookup is constant time and the footprint is
+// independent of the maximum number of references per card.
+class G1FromCardCache {
 public:
-  static void clear(uint region_idx);
+  // Cardset ids are never zero, so zero marks an unused entry. This is asserted
+  // against the actual cardset id space in G1HeapRegionRemSet::add_reference.
+  static constexpr uint EmptyId = 0;
 
-  // Returns true if the given card is in the cache at the given location, or
-  // replaces the card at that location and returns false.
-  static bool contains_or_replace(uint worker_id, uint region_idx, uintptr_t card) {
-    uintptr_t card_in_cache = at(worker_id, region_idx);
-    if (card_in_cache == card) {
+private:
+  static constexpr uint IndexShift = 5;
+  static constexpr uint NumEntries = 1u << IndexShift;
+
+  uintptr_t _source_card;
+  // Tier 1: the sole cardset id seen for _source_card, or EmptyId.
+  uint _single_cardset_id;
+  // Tier 3: one cardset id that collided in _cardset_ids, or EmptyId.
+  uint _overflow_cardset_id;
+  // Tier 2: direct-mapped table of seen cardset ids. Occupancy is tracked in a
+  // separate bitmask rather than with an EmptyId marker per entry so that
+  // reset() stays constant time.
+  uint _cardset_ids[NumEntries];
+  uint _occupied_bits;
+
+  static_assert(sizeof(_occupied_bits) * BitsPerByte >= NumEntries,
+                "_occupied_bits must have one bit per entry");
+
+  NONCOPYABLE(G1FromCardCache);
+
+  static uint slot_index_for(uint cardset_id) {
+    uint hash = cardset_id ^ (cardset_id >> IndexShift);
+    return hash & (NumEntries - 1);
+  }
+
+  // Tier 1 is filled first, so an unused tier 1 means nothing is recorded at all.
+  bool is_empty() const {
+    return _single_cardset_id == EmptyId;
+  }
+
+  void start_card(uintptr_t source_card) {
+    _source_card = source_card;
+    reset();
+  }
+
+  bool contains_or_add(uint cardset_id) {
+    if (_single_cardset_id == cardset_id) {
       return true;
-    } else {
-      set(worker_id, region_idx, card);
+    }
+    if (is_empty()) {
+      _single_cardset_id = cardset_id;
       return false;
     }
+
+    uint slot = slot_index_for(cardset_id);
+    uint slot_bit = 1u << slot;
+    if ((_occupied_bits & slot_bit) == 0) {
+      _cardset_ids[slot] = cardset_id;
+      _occupied_bits |= slot_bit;
+      return false;
+    }
+    if (_cardset_ids[slot] == cardset_id) {
+      return true;
+    }
+
+    if (_overflow_cardset_id == cardset_id) {
+      return true;
+    }
+    _overflow_cardset_id = cardset_id;
+    return false;
   }
 
-  static uintptr_t at(uint worker_id, uint region_idx) {
-    DEBUG_ONLY(check_bounds(worker_id, region_idx);)
-    return _cache[region_idx][worker_id];
+public:
+  G1FromCardCache() {
+    start_card(0);
   }
 
-  static void set(uint worker_id, uint region_idx, uintptr_t val) {
-    DEBUG_ONLY(check_bounds(worker_id, region_idx);)
-    _cache[region_idx][worker_id] = val;
+  // Discard the state associated with the _source_card. This must be called before
+  // a worker begins a new refinement or rebuild scan and after a rebuild yield.
+  void reset() {
+    _single_cardset_id = EmptyId;
+    _overflow_cardset_id = EmptyId;
+    _occupied_bits = 0;
   }
 
-  static void initialize(uint max_reserved_regions);
+  // Returns true if cardset_id has already been encountered while
+  // scanning source_card. Otherwise, records the id and returns false.
+  bool contains_or_add(uintptr_t source_card, uint cardset_id) {
+    assert(cardset_id != EmptyId, "must be a valid cardset id");
 
-  static void invalidate(uint start_idx, size_t num_regions);
-
-  static void print(outputStream* out = tty) PRODUCT_RETURN;
-
-  static size_t static_mem_size() {
-    return _static_mem_size;
+    if (is_empty() || _source_card != source_card) {
+      start_card(source_card);
+    }
+    return contains_or_add(cardset_id);
   }
 };
 

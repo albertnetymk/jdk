@@ -106,6 +106,13 @@ void PhaseCFG::ensure_node_is_at_block_or_above(Node* n, Block* b) {
   move_node_and_its_projections_to_block(n, b);
 }
 
+// A candidate memory operation for an implicit null check, optionally using an
+// address materialized by an AddP.
+struct ImplicitNullCheckCandidate {
+  MachNode* mach;
+  MachNode* addp;
+};
+
 //------------------------------implicit_null_check----------------------------
 // Detect implicit-null-check opportunities.  Basically, find null checks
 // with suitable memory ops nearby.  Use the memory op to do the null check.
@@ -181,12 +188,39 @@ void PhaseCFG::implicit_null_check(Block* block, Node *proj, Node *val, int allo
           (val->as_Mach()->ideal_Opcode() == Op_DecodeN)), "sanity");
 
   // Search the successor block for a load or store who's base value is also
-  // the tested value.  There may be several.
-  MachNode *best = nullptr;        // Best found so far
+  // the tested value. Some memory operations use the tested value directly,
+  // while others use an address materialized by an AddP:
+  //
+  //   val -> AddP -> memory operation
+  //
+  // The latter can still provide the implicit null check if the AddP computes a
+  // small, known offset. Track the optional AddP so it can be validated and
+  // hoisted together with the memory operation.
+  GrowableArray<ImplicitNullCheckCandidate> candidates;
   for (DUIterator i = val->outs(); val->has_out(i); i++) {
-    Node *m = val->out(i);
-    if( !m->is_Mach() ) continue;
-    MachNode *mach = m->as_Mach();
+    Node* m = val->out(i);
+    if (!m->is_Mach()) {
+      continue;
+    }
+    MachNode* mach = m->as_Mach();
+    if (mach->ideal_Opcode() == Op_AddP) {
+      for (DUIterator_Fast jmax, j = mach->fast_outs(jmax); j < jmax; j++) {
+        Node* use = mach->fast_out(j);
+        if (use->is_Mach()) {
+          candidates.append({use->as_Mach(), mach});
+        }
+      }
+    } else {
+      candidates.append({mach, nullptr});
+    }
+  }
+
+  MachNode* best = nullptr;
+  MachNode* best_addp = nullptr;
+  for (int i = 0; i < candidates.length(); i++) {
+    MachNode* mach = candidates.at(i).mach;
+    MachNode* addp = candidates.at(i).addp;
+    Node* address = addp == nullptr ? val : addp;
     if (mach->barrier_data() != 0 &&
         !mach->is_late_expanded_null_check_candidate()) {
       // Using memory accesses with barriers to perform implicit null checks is
@@ -215,7 +249,9 @@ void PhaseCFG::implicit_null_check(Block* block, Node *proj, Node *val, int allo
     case Op_LoadRange:
     case Op_LoadD_unaligned:
     case Op_LoadL_unaligned:
-      assert(mach->in(2) == val, "should be address");
+      if (mach->in(2) != address) {
+        continue;
+      }
       break;
     case Op_StoreB:
     case Op_StoreC:
@@ -289,12 +325,15 @@ void PhaseCFG::implicit_null_check(Block* block, Node *proj, Node *val, int allo
       continue;
     }
 
-    // check if the offset is not too high for implicit exception
+    // Check that the access stays within the protected page when the tested
+    // pointer is null. The effective offset includes the memory operand's
+    // displacement and the offset carried by its base's pointer type.
     {
       intptr_t offset = 0;
       const TypePtr *adr_type = nullptr;  // Do not need this return value here
       const Node* base = mach->get_base_and_disp(offset, adr_type);
       if (base == nullptr || base == NodeSentinel) {
+        assert(addp == nullptr, "AddP address must have a memory operand base");
         // Narrow oop address doesn't have base, only index.
         // Give up if offset is beyond page size or if heap base is not protected.
         if (val->bottom_type()->isa_narrowoop() &&
@@ -303,23 +342,36 @@ void PhaseCFG::implicit_null_check(Block* block, Node *proj, Node *val, int allo
           continue;
         // cannot reason about it; is probably not implicit null exception
       } else {
-        const TypePtr* tptr;
+        if (addp != nullptr) {
+          // An indirect operand uses the AddP as its base with zero displacement.
+          // The AddP must be based on the tested value; its result type carries
+          // the offset from that value to the accessed address.
+          if (offset != 0 || base != addp ||
+              addp->bottom_type()->isa_oopptr() == nullptr ||
+              addp->in(1) != val) {
+            continue;
+          }
+        }
+
+        // Compute the constant effective offset from the null-checked pointer.
+        const TypePtr* base_type;
         if ((UseCompressedOops && CompressedOops::shift() == 0) || CompressedKlassPointers::shift() == 0) {
           // 32-bits narrow oop can be the base of address expressions
-          tptr = base->get_ptr_type();
+          base_type = base->get_ptr_type();
         } else {
           // only regular oops are expected here
-          tptr = base->bottom_type()->is_ptr();
+          base_type = base->bottom_type()->is_ptr();
         }
         // Give up if offset is not a compile-time constant.
-        if (offset == Type::OffsetBot || tptr->offset() == Type::OffsetBot)
+        if (offset == Type::OffsetBot || base_type->offset() == Type::OffsetBot)
           continue;
-        offset += tptr->offset(); // correct if base is offsetted
-        // Give up if reference is beyond page size.
-        if (MacroAssembler::needs_explicit_null_check(offset))
+        const intptr_t effective_offset = offset + base_type->offset();
+
+        // A null pointer plus the effective offset must stay in the protected page.
+        if (MacroAssembler::needs_explicit_null_check(effective_offset))
           continue;
-        // Give up if base is a decode node and the heap base is not protected.
-        if (base->is_Mach() && base->as_Mach()->ideal_Opcode() == Op_DecodeN &&
+        // A decoded null may point at the heap base, which must also be protected.
+        if (val->is_Mach() && val->as_Mach()->ideal_Opcode() == Op_DecodeN &&
             !CompressedOops::use_implicit_null_checks())
           continue;
       }
@@ -345,10 +397,13 @@ void PhaseCFG::implicit_null_check(Block* block, Node *proj, Node *val, int allo
     uint vidx = 0;              // Capture index of value into memop
     uint j;
     for( j = mach->req()-1; j > 0; j-- ) {
-      if( mach->in(j) == val ) {
+      if (mach->in(j) == address) {
         vidx = j;
+        // addp is checked later on
         // Ignore DecodeN val which could be hoisted to where needed.
-        if( is_decoden ) continue;
+        if (addp != nullptr || is_decoden) {
+          continue;
+        }
       }
       if (mach->in(j)->is_MachTemp()) {
         assert(mach->in(j)->outcnt() == 1, "MachTemp nodes should not be shared");
@@ -373,6 +428,34 @@ void PhaseCFG::implicit_null_check(Block* block, Node *proj, Node *val, int allo
     }
     if( j > 0 )
       continue;
+
+    if (addp != nullptr) {
+      // The address calculation will move above the explicit null check with
+      // the memory operation. Its control and data inputs must be
+      // available at the null-check block as well.
+      Node* ctrl = addp->in(0);
+      if (ctrl != nullptr && !get_block_for_node(ctrl)->dominates(not_null_block)) {
+        continue;
+      }
+      for (j = addp->req() - 1; j > 0; j--) {
+        Node* input = addp->in(j);
+        if (input == val) {
+          continue;
+        }
+        Block* input_block = get_block_for_node(input);
+        Block* b = block;
+        while (b != input_block && b->_dom_depth > input_block->_dom_depth) {
+          b = b->_idom;
+        }
+        if (b != input_block) {
+          break;
+        }
+      }
+      if (j > 0) {
+        continue;
+      }
+    }
+
     Block *mb = get_block_for_node(mach);
     // Hoisting stores requires more checks for the anti-dependence case.
     // Give up hoisting if we have to move the store past any load.
@@ -408,6 +491,7 @@ void PhaseCFG::implicit_null_check(Block* block, Node *proj, Node *val, int allo
     // in the dom tree should be closest to the null check.
     if (best == nullptr || get_block_for_node(mach)->_dom_depth < get_block_for_node(best)->_dom_depth) {
       best = mach;
+      best_addp = addp;
       bidx = vidx;
     }
   }
@@ -464,6 +548,17 @@ void PhaseCFG::implicit_null_check(Block* block, Node *proj, Node *val, int allo
       continue;
     }
     ensure_node_is_at_block_or_above(n, block);
+  }
+
+  // Materialize the effective address before the memory operation. The memory
+  // operation must remain the last real instruction before MachNullCheck so its
+  // instruction address is recorded as the implicit exception point.
+  if (best_addp != nullptr) {
+    move_node_and_its_projections_to_block(best_addp, block);
+    Node* ctrl = best_addp->in(0);
+    if (ctrl != nullptr && get_block_for_node(ctrl) == not_null_block) {
+      best_addp->set_req(0, proj->in(0)->in(0));
+    }
   }
 
   // Hoist the memory candidate up to the end of the test block.

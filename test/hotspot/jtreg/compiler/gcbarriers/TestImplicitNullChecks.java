@@ -80,12 +80,11 @@ public class TestImplicitNullChecks {
     }
 
     @Test
-    // On aarch64, volatile loads always use indirect memory operands, which
-    // leads to a pattern that cannot be exploited by the current C2 analysis.
-    // The same holds on RISC-V when UseZalasr is enabled.
+    // The current C2 analysis cannot exploit volatile loads that use indirect
+    // memory operands, as happens on RISC-V when UseZalasr is enabled.
     // On PPC64, volatile loads are preceded by membar_volatile instructions,
     // which also inhibits the current C2 analysis.
-    @IR(applyIfPlatformAnd = {"aarch64", "false", "ppc", "false", "riscv64", "false"},
+    @IR(applyIfPlatformAnd = {"aix", "false", "ppc", "false", "riscv64", "false"},
         applyIfOr = {"UseZGC", "true", "UseG1GC", "true"},
         counts = {IRNode.NULL_CHECK, "1"},
         phase = CompilePhase.FINAL_CODE)

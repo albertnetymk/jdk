@@ -1244,6 +1244,12 @@ class MemBarNode: public MultiNode {
     TrailingExpandedArrayCopy
   } _kind;
 
+  // True if this MemBarRelease was created by C2AccessFence as the leading
+  // fence of a release-only atomic access.  Distinguishes it from an unrelated
+  // standalone release that merely happens to precede an access, e.g. a
+  // constructor/final-field publication barrier.
+  bool _release_atomic;
+
 #ifdef ASSERT
   uint _pair_idx;
 #endif
@@ -1277,6 +1283,8 @@ public:
   bool trailing() const { return _kind == TrailingLoad || _kind == TrailingStore || _kind == TrailingLoadStore; }
   bool leading() const { return _kind == LeadingStore || _kind == LeadingLoadStore; }
   bool standalone() const { return _kind == Standalone; }
+  void set_release_atomic() { _release_atomic = true; }
+  bool is_release_atomic() const { return _release_atomic; }
   void set_trailing_expanded_array_copy() { _kind = TrailingExpandedArrayCopy; }
   bool trailing_expanded_array_copy() const { return _kind == TrailingExpandedArrayCopy; }
 

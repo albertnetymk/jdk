@@ -702,8 +702,8 @@ void ShenandoahBarrierSetAssembler::store_c2(const MachNode* node, MacroAssemble
 }
 
 void ShenandoahBarrierSetAssembler::compare_and_set_c2(const MachNode* node, MacroAssembler* masm, Register res, Register addr,
-    Register oldval, Register newval, Register tmp1, Register tmp2, Register tmp3, bool exchange, bool narrow, bool is_acquire) {
-  const atomic_memory_order order = is_acquire ? memory_order_seq_cst : memory_order_release;
+    Register oldval, Register newval, Register tmp1, Register tmp2, Register tmp3, bool exchange, bool narrow,
+    atomic_memory_order order) {
   const Assembler::operand_size size = narrow ? Assembler::uint32 : Assembler::int64;
 
   ShenandoahBarrierStubC2::load_store_pre(masm, node, Address(addr), tmp1, tmp2, tmp3, narrow);

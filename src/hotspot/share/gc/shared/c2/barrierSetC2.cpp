@@ -270,6 +270,11 @@ public:
       // compiler to respect ordering.
       if (is_release) {
         _leading_membar = kit->insert_mem_bar(Op_MemBarRelease);
+        // Mark this fence as belonging to the release-only atomic access, so a
+        // backend may elide it on the strength of the access's release
+        // ordering.  An unrelated standalone release (e.g. a constructor
+        // barrier) must not be attributed to the access.
+        _leading_membar->as_MemBar()->set_release_atomic();
       } else if (is_volatile) {
         if (support_IRIW_for_not_multiple_copy_atomic_cpu) {
           _leading_membar = kit->insert_mem_bar(Op_MemBarVolatile);

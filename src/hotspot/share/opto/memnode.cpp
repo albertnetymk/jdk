@@ -4659,7 +4659,7 @@ Node* ClearArrayNode::clear_memory(Node* ctl, Node* mem, Node* dest,
 //=============================================================================
 MemBarNode::MemBarNode(Compile* C, const TypePtr* out_adr_type, const TypePtr* in_adr_type, Node* precedent)
   : MultiNode(TypeFunc::Parms + (precedent == nullptr? 0: 1)),
-    _out_adr_type(out_adr_type), _in_adr_type(in_adr_type), _kind(Standalone)
+    _out_adr_type(out_adr_type), _in_adr_type(in_adr_type), _kind(Standalone), _release_atomic(false)
 #ifdef ASSERT
   , _pair_idx(0)
 #endif

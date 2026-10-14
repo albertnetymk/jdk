@@ -103,7 +103,8 @@ public:
   void store_c2(const MachNode* node, MacroAssembler* masm, Address dst, bool dst_narrow, Register src,
       bool src_narrow, Register tmp1, Register tmp2, Register tmp3, bool is_volatile);
   void compare_and_set_c2(const MachNode* node, MacroAssembler* masm, Register res, Register addr, Register oldval,
-      Register newval, Register tmp1, Register tmp2, Register tmp3, bool exchange, bool narrow, bool is_acquire);
+      Register newval, Register tmp1, Register tmp2, Register tmp3, bool exchange, bool narrow,
+      atomic_memory_order order);
   void get_and_set_c2(const MachNode* node, MacroAssembler* masm, Register preval, Register newval,
       Register addr, Register tmp1, Register tmp2, Register tmp3, bool is_acquire);
 #endif

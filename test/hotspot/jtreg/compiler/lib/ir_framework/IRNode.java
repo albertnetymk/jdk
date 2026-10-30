@@ -775,6 +775,11 @@ public class IRNode {
         machOnly(DECODE_HEAP_OOP_NOT_NULL, "decodeHeapOop_not_null");
     }
 
+    public static final String DECODE_N = PREFIX + "DECODE_N" + POSTFIX;
+    static {
+        beforeMatchingNameRegex(DECODE_N, "DecodeN\\b");
+    }
+
     public static final String DIV = PREFIX + "DIV" + POSTFIX;
     static {
         beforeMatchingNameRegex(DIV, "Div(I|L|F|D)");
@@ -858,6 +863,11 @@ public class IRNode {
     public static final String DYNAMIC_CALL_OF_METHOD = COMPOSITE_PREFIX + "DYNAMIC_CALL_OF_METHOD" + POSTFIX;
     static {
         callOfNodes(DYNAMIC_CALL_OF_METHOD, "CallDynamicJava", IS_REPLACED);
+    }
+
+    public static final String ENCODE_P = PREFIX + "ENCODE_P" + POSTFIX;
+    static {
+        beforeMatchingNameRegex(ENCODE_P, "EncodeP\\b");
     }
 
     public static final String EXPAND_BITS = PREFIX + "EXPAND_BITS" + POSTFIX;

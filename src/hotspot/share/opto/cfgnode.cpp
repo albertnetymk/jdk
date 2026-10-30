@@ -2749,6 +2749,7 @@ Node *PhiNode::Ideal(PhaseGVN *phase, bool can_reshape) {
     bool may_push = true;
     bool has_decodeN = false;
     bool is_decodeN = false;
+    const bool is_oop_phi = bottom_type()->isa_oopptr() != nullptr;
     for (uint i=1; i<req(); ++i) {// For all paths in
       Node *ii = in(i);
       if (ii->is_DecodeNarrowPtr() && ii->bottom_type() == bottom_type()) {
@@ -2757,8 +2758,13 @@ Node *PhiNode::Ideal(PhaseGVN *phase, bool can_reshape) {
           has_decodeN = true;
           is_decodeN = ii->is_DecodeN();
         }
-      } else if (!ii->is_Phi()) {
+      } else if (is_oop_phi && ii->bottom_type() == TypePtr::NULL_PTR) {
+        // Null oop: converted to narrow zero below.
+      } else if (ii->is_Phi()) {
+        // Nested/self-referencing Phi: handled below.
+      } else {
         may_push = false;
+        break;
       }
     }
 
@@ -2779,6 +2785,8 @@ Node *PhiNode::Ideal(PhaseGVN *phase, bool can_reshape) {
         if (ii->is_DecodeNarrowPtr()) {
           assert(ii->bottom_type() == bottom_type(), "sanity");
           new_ii = ii->in(1);
+        } else if (is_decodeN && ii->bottom_type() == TypePtr::NULL_PTR) {
+          new_ii = phase->zerocon(T_NARROWOOP);
         } else {
           assert(ii->is_Phi(), "sanity");
           if (ii->as_Phi() == this) {
